@@ -23,3 +23,12 @@ def deps do
   ]
 end
 ```
+
+## Aggregate Strategies
+
+`AshSql.Implementation` defaults aggregate planning to `:lateral`. SQL data
+layers can override `aggregate_strategy/1` with `:grouped` when they need the
+SQLite-style grouped aggregate implementation.
+
+The grouped strategy uses native aggregate `FILTER` support and JSON-backed list
+aggregate defaults.
