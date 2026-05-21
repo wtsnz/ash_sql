@@ -87,7 +87,7 @@ defmodule AshSql.Aggregate do
   defp strategy(%Context{} = context) do
     case context.sql_behaviour.aggregate_strategy(context.resource) do
       :lateral -> AshSql.Aggregate.Lateral
-      other -> raise "Unsupported AshSql aggregate strategy: #{inspect(other)}"
+      :grouped -> AshSql.Aggregate.Grouped
     end
   end
 end
