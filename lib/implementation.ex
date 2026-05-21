@@ -38,6 +38,7 @@ defmodule AshSql.Implementation do
   @callback require_extension_for_citext() :: {true, String.t()} | false
   @callback strpos_function() :: String.t()
   @callback type_expr(expr :: term, type :: term) :: term
+  @callback aggregate_strategy(Ash.Resource.t()) :: :lateral | :grouped
 
   @optional_callbacks determine_types: 3
 
@@ -58,6 +59,7 @@ defmodule AshSql.Implementation do
       def ilike?, do: true
       def equals_any?, do: true
       def storage_type(_, _), do: nil
+      def aggregate_strategy(_resource), do: :lateral
 
       def type_expr(expr, type) do
         type =
@@ -85,6 +87,7 @@ defmodule AshSql.Implementation do
                      require_ash_functions_for_or_and_and?: 0,
                      require_extension_for_citext: 0,
                      simple_join_first_aggregates: 1,
+                     aggregate_strategy: 1,
                      type_expr: 2,
                      storage_type: 2,
                      list_aggregate: 1,
