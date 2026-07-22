@@ -1295,7 +1295,7 @@ defmodule AshSql.Aggregate.Grouped do
     Ecto.Query.dynamic([row], field(row, ^row_number_field) == 1)
   end
 
-  defp window_aggregate_value(sql_behaviour, %{kind: :first, type: type}) do
+  defp window_aggregate_value(sql_behaviour, %{kind: :first} = aggregate) do
     value_field = @window_value_field
 
     value =
@@ -1304,10 +1304,10 @@ defmodule AshSql.Aggregate.Grouped do
         over(first_value(field(row, ^value_field)), :ash_sql_grouped_aggregate_window)
       )
 
-    maybe_type_dynamic(sql_behaviour, value, type)
+    maybe_type_dynamic(sql_behaviour, value, aggregate)
   end
 
-  defp window_aggregate_value(sql_behaviour, %{kind: :list, include_nil?: true, type: type}) do
+  defp window_aggregate_value(sql_behaviour, %{kind: :list, include_nil?: true} = aggregate) do
     value_field = @window_value_field
 
     value =
@@ -1319,10 +1319,10 @@ defmodule AshSql.Aggregate.Grouped do
         )
       )
 
-    maybe_type_dynamic(sql_behaviour, value, type)
+    maybe_type_dynamic(sql_behaviour, value, aggregate)
   end
 
-  defp window_aggregate_value(sql_behaviour, %{kind: :list, type: type}) do
+  defp window_aggregate_value(sql_behaviour, %{kind: :list} = aggregate) do
     value_field = @window_value_field
 
     value =
@@ -1338,20 +1338,25 @@ defmodule AshSql.Aggregate.Grouped do
         )
       )
 
-    maybe_type_dynamic(sql_behaviour, value, type)
+    maybe_type_dynamic(sql_behaviour, value, aggregate)
   end
 
-  defp maybe_type_dynamic(_sql_behaviour, dynamic, nil), do: dynamic
+  defp maybe_type_dynamic(_sql_behaviour, dynamic, %{type: nil}), do: dynamic
 
-  defp maybe_type_dynamic(sql_behaviour, dynamic, type) do
-    case sqlite_aggregate_type(sql_behaviour, type) do
+  defp maybe_type_dynamic(sql_behaviour, dynamic, aggregate) do
+    case aggregate_type(sql_behaviour, aggregate) do
       nil -> dynamic
       type -> sql_behaviour.type_expr(dynamic, type)
     end
   end
 
-  defp sqlite_aggregate_type(sql_behaviour, type) do
-    sql_behaviour.parameterized_type(type, [])
+  defp aggregate_type(sql_behaviour, aggregate) do
+    AshSql.Expr.parameterized_type(
+      sql_behaviour,
+      aggregate.type,
+      aggregate.constraints,
+      :aggregate
+    )
   end
 
   defp window_aggregate_sort(%{query: %{sort: sort}} = aggregate, relationship) do
@@ -1549,7 +1554,7 @@ defmodule AshSql.Aggregate.Grouped do
   end
 
   defp loaded_aggregate_dynamic(%{kind: :list} = aggregate, binding, sql_behaviour) do
-    type = sqlite_aggregate_type(sql_behaviour, aggregate.type)
+    type = aggregate_type(sql_behaviour, aggregate)
     default_value = aggregate.default_value || []
 
     aggregate
