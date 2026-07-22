@@ -113,16 +113,28 @@ defmodule AshSql.Aggregate.Grouped.Query do
     end
   end
 
-  defp aggregate_dynamic(query, %{kind: :count, field: nil} = aggregate, _resource) do
-    dynamic =
-      if aggregate.uniq? do
-        Ecto.Query.dynamic(count(field(as(^query.__ash_bindings__.root_binding), :id), :distinct))
-      else
-        Ecto.Query.dynamic(count())
-      end
+  defp aggregate_dynamic(query, %{kind: :count, field: nil, uniq?: true} = aggregate, resource) do
+    case Ash.Resource.Info.primary_key(resource) do
+      [field] ->
+        dynamic =
+          Ecto.Query.dynamic(
+            count(field(as(^query.__ash_bindings__.root_binding), ^field), :distinct)
+          )
 
-    {:ok, dynamic}
+        {:ok, dynamic}
+
+      [] ->
+        {:error,
+         "AshSql grouped query aggregate #{inspect(aggregate.name)} requires a single primary key to count distinct records, but #{inspect(resource)} has no primary key"}
+
+      fields ->
+        {:error,
+         "AshSql grouped query aggregate #{inspect(aggregate.name)} requires a single primary key to count distinct records, but #{inspect(resource)} has composite primary key #{inspect(fields)}"}
+    end
   end
+
+  defp aggregate_dynamic(_query, %{kind: :count, field: nil}, _resource),
+    do: {:ok, Ecto.Query.dynamic(count())}
 
   defp aggregate_dynamic(query, %{kind: :count} = aggregate, resource) do
     with {:ok, field} <- aggregate_field(aggregate, resource) do
