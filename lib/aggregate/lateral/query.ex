@@ -7,9 +7,6 @@ defmodule AshSql.Aggregate.Lateral.Query do
   import Ecto.Query, only: [from: 2, subquery: 1]
 
   def run_aggregate_query(original_query, aggregates, resource, implementation) do
-    original_query =
-      AshSql.Bindings.default_bindings(original_query, resource, implementation)
-
     {can_group, cant_group} =
       aggregates
       |> Enum.split_with(&AshSql.Aggregate.can_group?(resource, &1, original_query))

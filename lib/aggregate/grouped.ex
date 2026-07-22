@@ -13,10 +13,11 @@ defmodule AshSql.Aggregate.Grouped do
   @window_value_field :__ash_sql_grouped_aggregate_value__
   @window_row_number_field :__ash_sql_grouped_aggregate_row_number__
   @window_count_field :__ash_sql_grouped_aggregate_count__
+  @relationship_row_number_field :__ash_sql_grouped_relationship_row_number__
   @unrelated_join_field :__ash_sql_grouped_unrelated_join__
 
-  def add_aggregates(%AshSql.Aggregate.Context{} = context, aggregates) do
-    add_aggregates(context.query, aggregates, context.resource, select?: context.select?)
+  def add_aggregates(query, aggregates, resource, select?, _source_binding, _root_data) do
+    add_aggregates(query, aggregates, resource, select?: select?)
   end
 
   def add_aggregates(query, aggregates, resource, opts \\ []) do
@@ -329,20 +330,7 @@ defmodule AshSql.Aggregate.Grouped do
   end
 
   defp relationships(resource, relationship_path) do
-    relationship_path
-    |> Enum.reduce_while({:ok, resource, []}, fn relationship_name, {:ok, resource, acc} ->
-      case Ash.Resource.Info.relationship(resource, relationship_name) do
-        nil ->
-          {:halt, {:error, "No such relationship #{inspect(resource)}.#{relationship_name}"}}
-
-        relationship ->
-          {:cont, {:ok, relationship.destination, [relationship | acc]}}
-      end
-    end)
-    |> case do
-      {:ok, _resource, relationships} -> {:ok, Enum.reverse(relationships)}
-      {:error, error} -> {:error, error}
-    end
+    {:ok, AshSql.Join.relationship_path_to_relationships(resource, relationship_path)}
   end
 
   defp validate_relationships(resource, relationship_path, relationships, aggregates) do
@@ -361,6 +349,10 @@ defmodule AshSql.Aggregate.Grouped do
         {:error,
          "AshSql does not support loading aggregates over many_to_many relationships with parent-dependent join filters"}
 
+      Enum.any?(relationships, &limited_many_to_many?/1) ->
+        {:error,
+         "AshSql does not support loading aggregates over limited many_to_many relationships"}
+
       unsupported_multi_hop_many_to_many?(relationships, aggregates) ->
         {:error,
          "AshSql does not support loading aggregates over multi-hop paths that include many_to_many relationships"}
@@ -373,6 +365,12 @@ defmodule AshSql.Aggregate.Grouped do
         :ok
     end
   end
+
+  defp limited_many_to_many?(%{type: :many_to_many} = relationship) do
+    limited_relationship?(relationship)
+  end
+
+  defp limited_many_to_many?(_relationship), do: false
 
   defp unsupported_multi_hop_many_to_many?(relationships, aggregates) do
     length(relationships) > 1 &&
@@ -867,10 +865,10 @@ defmodule AshSql.Aggregate.Grouped do
     |> Ash.Query.data_layer_query(run_return_query?: false)
     |> case do
       {:ok, query} ->
-        {:ok,
-         query
-         |> Ecto.Query.exclude(:select)
-         |> Ecto.Query.exclude(:order_by)}
+        query
+        |> Ecto.Query.exclude(:select)
+        |> Ecto.Query.exclude(:order_by)
+        |> limit_relationship_rows(relationship)
 
       {:error, error} ->
         {:error, error}
@@ -892,10 +890,10 @@ defmodule AshSql.Aggregate.Grouped do
     |> Ash.Query.data_layer_query(run_return_query?: false)
     |> case do
       {:ok, query} ->
-        {:ok,
-         query
-         |> Ecto.Query.exclude(:select)
-         |> Ecto.Query.exclude(:order_by)}
+        query
+        |> Ecto.Query.exclude(:select)
+        |> Ecto.Query.exclude(:order_by)
+        |> limit_relationship_rows(relationship)
 
       {:error, error} ->
         {:error, error}
@@ -931,6 +929,96 @@ defmodule AshSql.Aggregate.Grouped do
     end
   end
 
+  defp limit_relationship_rows(query, relationship) do
+    if limited_relationship?(relationship) do
+      root_binding = query.__ash_bindings__.root_binding
+
+      with {:ok, order_by, query} <-
+             relationship_limit_order_by(query, relationship, root_binding) do
+        partition_by =
+          Ecto.Query.dynamic(field(as(^root_binding), ^relationship.destination_attribute))
+
+        ranked_query =
+          from(row in query,
+            windows: [
+              ash_sql_grouped_relationship_window: [
+                partition_by: ^partition_by,
+                order_by: ^order_by
+              ]
+            ],
+            select_merge: %{
+              @relationship_row_number_field =>
+                over(row_number(), :ash_sql_grouped_relationship_window)
+            }
+          )
+
+        filtered_query =
+          ranked_query
+          |> Ecto.Query.subquery()
+          |> relationship_row_filter(relationship, root_binding)
+
+        {:ok, reset_relationship_bindings(filtered_query, query.__ash_bindings__)}
+      end
+    else
+      {:ok, query}
+    end
+  end
+
+  defp limited_relationship?(relationship) do
+    is_integer(Map.get(relationship, :limit)) or
+      (Map.get(relationship, :offset) || 0) > 0
+  end
+
+  defp relationship_limit_order_by(query, relationship, root_binding) do
+    case List.wrap(Map.get(relationship, :sort)) do
+      [] ->
+        {:ok, [], query}
+
+      sort ->
+        AshSql.Sort.sort(
+          query,
+          sort,
+          relationship.destination,
+          [],
+          root_binding,
+          :expressions
+        )
+    end
+  end
+
+  defp relationship_row_filter(query, relationship, root_binding) do
+    offset = Map.get(relationship, :offset) || 0
+    row_number_field = @relationship_row_number_field
+
+    case Map.get(relationship, :limit) do
+      limit when is_integer(limit) ->
+        from(row in query,
+          as: ^root_binding,
+          where:
+            field(row, ^row_number_field) > ^offset and
+              field(row, ^row_number_field) <= ^(offset + limit)
+        )
+
+      _limit ->
+        from(row in query,
+          as: ^root_binding,
+          where: field(row, ^row_number_field) > ^offset
+        )
+    end
+  end
+
+  defp reset_relationship_bindings(query, bindings) do
+    root_binding = bindings.root_binding
+    root = Map.fetch!(bindings.bindings, root_binding)
+
+    Map.put(query, :__ash_bindings__, %{
+      bindings
+      | bindings: %{root_binding => root},
+        current: root_binding + 1,
+        expression_accumulator: %AshSql.Expr.ExprInfo{}
+    })
+  end
+
   defp intermediate_query(parent_query, relationship, binding, aggregate, relationship_path) do
     read_action =
       relationship.read_action ||
@@ -951,10 +1039,10 @@ defmodule AshSql.Aggregate.Grouped do
     |> Ash.Query.data_layer_query(run_return_query?: false)
     |> case do
       {:ok, query} ->
-        {:ok,
-         query
-         |> Ecto.Query.exclude(:select)
-         |> Ecto.Query.exclude(:order_by)}
+        query
+        |> Ecto.Query.exclude(:select)
+        |> Ecto.Query.exclude(:order_by)
+        |> limit_relationship_rows(relationship)
 
       {:error, error} ->
         {:error, error}
@@ -1161,22 +1249,39 @@ defmodule AshSql.Aggregate.Grouped do
        ) do
     with :ok <- validate_window_aggregate(aggregate),
          {:ok, sort} <- window_aggregate_sort(aggregate, relationship),
-         :ok <- validate_window_aggregate_sort(aggregate, sort) do
+         :ok <- validate_window_aggregate_sort(aggregate, sort),
+         {:ok, query, value} <-
+           AshSql.Aggregate.field_expression(
+             query,
+             aggregate,
+             Map.get(relationship, :destination, aggregate.query.resource)
+           ),
+         {:ok, order_by, query} <-
+           AshSql.Sort.sort(
+             query,
+             sort,
+             Map.get(relationship, :destination, aggregate.query.resource),
+             [],
+             value_binding,
+             :expressions
+           ) do
       sql_behaviour = query.__ash_bindings__.sql_behaviour
 
-      query =
-        query
-        |> maybe_filter_window_nil_values(aggregate, value_binding)
-        |> window_source_query(aggregate, join_attribute, partition_binding, value_binding, sort)
-        |> Ecto.Query.subquery()
-        |> window_result_query(aggregate, join_attribute, sort, sql_behaviour)
+      with {:ok, aggregate_value} <- window_aggregate_value(sql_behaviour, aggregate) do
+        query =
+          query
+          |> maybe_filter_window_nil_values(aggregate, value)
+          |> window_source_query(aggregate, join_attribute, partition_binding, value, order_by)
+          |> Ecto.Query.subquery()
+          |> window_result_query(aggregate, join_attribute, order_by, aggregate_value)
 
-      {:ok, query}
+        {:ok, query}
+      end
     end
   end
 
   defp validate_window_aggregate(%{field: field, kind: kind})
-       when kind in @window_aggregate_kinds and is_atom(field) and not is_nil(field) do
+       when kind in @window_aggregate_kinds and not is_nil(field) do
     :ok
   end
 
@@ -1196,10 +1301,11 @@ defmodule AshSql.Aggregate.Grouped do
 
   defp validate_window_aggregate_sort(_aggregate, _sort), do: :ok
 
-  defp maybe_filter_window_nil_values(query, %{include_nil?: true}, _binding), do: query
+  defp maybe_filter_window_nil_values(query, %{include_nil?: true}, _value), do: query
 
-  defp maybe_filter_window_nil_values(query, aggregate, binding) do
-    from(row in query, where: not is_nil(field(as(^binding), ^aggregate.field)))
+  defp maybe_filter_window_nil_values(query, _aggregate, value) do
+    filter = Ecto.Query.dynamic(not is_nil(^value))
+    Ecto.Query.where(query, ^filter)
   end
 
   defp window_source_query(
@@ -1207,21 +1313,21 @@ defmodule AshSql.Aggregate.Grouped do
          aggregate,
          join_attribute,
          partition_binding,
-         value_binding,
-         sort
+         value,
+         order_by
        ) do
     sort_selects =
-      sort
+      order_by
       |> Enum.with_index()
-      |> Map.new(fn {{field, _order}, index} ->
-        {window_sort_field(index), Ecto.Query.dynamic(field(as(^value_binding), ^field))}
+      |> Map.new(fn {{_order, expression}, index} ->
+        {window_sort_field(index), expression}
       end)
 
     select =
       Map.merge(
         %{
           join_attribute => window_join_field(partition_binding, join_attribute),
-          @window_value_field => Ecto.Query.dynamic(field(as(^value_binding), ^aggregate.field))
+          @window_value_field => value
         },
         sort_selects
       )
@@ -1238,16 +1344,15 @@ defmodule AshSql.Aggregate.Grouped do
     from(row in query, select: ^select)
   end
 
-  defp window_result_query(source_query, aggregate, join_attribute, sort, sql_behaviour) do
+  defp window_result_query(source_query, aggregate, join_attribute, sort, aggregate_value) do
     order_by =
       sort
       |> Enum.with_index()
-      |> Enum.map(fn {{_field, order}, index} ->
+      |> Enum.map(fn {{order, _expression}, index} ->
         {ecto_sort_order(order), Ecto.Query.dynamic([row], field(row, ^window_sort_field(index)))}
       end)
 
     partition_by = Ecto.Query.dynamic([row], field(row, ^join_attribute))
-    aggregate_value = window_aggregate_value(sql_behaviour, aggregate)
 
     query =
       from(row in source_query,
@@ -1304,41 +1409,32 @@ defmodule AshSql.Aggregate.Grouped do
         over(first_value(field(row, ^value_field)), :ash_sql_grouped_aggregate_window)
       )
 
-    maybe_type_dynamic(sql_behaviour, value, aggregate)
+    {:ok, maybe_type_dynamic(sql_behaviour, value, aggregate)}
   end
 
   defp window_aggregate_value(sql_behaviour, %{kind: :list, include_nil?: true} = aggregate) do
     value_field = @window_value_field
+    field = Ecto.Query.dynamic([row], field(row, ^value_field))
 
-    value =
-      Ecto.Query.dynamic(
-        [row],
-        over(
-          fragment("json_group_array(?)", field(row, ^value_field)),
-          :ash_sql_grouped_aggregate_window
-        )
-      )
-
-    maybe_type_dynamic(sql_behaviour, value, aggregate)
+    grouped_list_aggregate(sql_behaviour, field, aggregate)
   end
 
   defp window_aggregate_value(sql_behaviour, %{kind: :list} = aggregate) do
     value_field = @window_value_field
+    field = Ecto.Query.dynamic([row], field(row, ^value_field))
 
-    value =
-      Ecto.Query.dynamic(
-        [row],
-        over(
-          fragment(
-            "json_group_array(?) FILTER (WHERE ? IS NOT NULL)",
-            field(row, ^value_field),
-            field(row, ^value_field)
-          ),
-          :ash_sql_grouped_aggregate_window
-        )
-      )
+    grouped_list_aggregate(sql_behaviour, field, aggregate)
+  end
 
-    maybe_type_dynamic(sql_behaviour, value, aggregate)
+  defp grouped_list_aggregate(sql_behaviour, field, aggregate) do
+    case sql_behaviour.grouped_list_aggregate(field, aggregate.include_nil?) do
+      nil ->
+        {:error,
+         "#{inspect(sql_behaviour)} does not implement list aggregates for the grouped aggregate strategy"}
+
+      list_aggregate ->
+        {:ok, maybe_type_dynamic(sql_behaviour, list_aggregate, aggregate)}
+    end
   end
 
   defp maybe_type_dynamic(_sql_behaviour, dynamic, %{type: nil}), do: dynamic
@@ -1374,10 +1470,10 @@ defmodule AshSql.Aggregate.Grouped do
 
     sort
     |> Enum.reduce_while({:ok, []}, fn
-      {field, order}, {:ok, acc} when is_atom(field) and is_atom(order) ->
+      {field, order}, {:ok, acc} when is_atom(order) ->
         {:cont, {:ok, [{field, order} | acc]}}
 
-      field, {:ok, acc} when is_atom(field) ->
+      field, {:ok, acc} when not is_nil(field) ->
         {:cont, {:ok, [{field, :asc} | acc]}}
 
       sort, _acc ->
@@ -1412,35 +1508,26 @@ defmodule AshSql.Aggregate.Grouped do
   defp ecto_sort_order(other), do: other
 
   defp aggregate_dynamic(query, relationship, %{kind: :exists} = aggregate, binding) do
-    count_dynamic = count_dynamic(relationship, aggregate, binding)
-
-    with {:ok, query, count_dynamic} <-
+    with {:ok, query, count_dynamic} <- count_dynamic(query, relationship, aggregate, binding),
+         {:ok, query, count_dynamic} <-
            maybe_filter_aggregate(query, aggregate, count_dynamic) do
       {:ok, query, Ecto.Query.dynamic(^count_dynamic > 0)}
     end
   end
 
   defp aggregate_dynamic(query, relationship, %{kind: :count} = aggregate, binding) do
-    dynamic = count_dynamic(relationship, aggregate, binding)
-
-    with {:ok, query, dynamic} <- maybe_filter_aggregate(query, aggregate, dynamic) do
+    with {:ok, query, dynamic} <- count_dynamic(query, relationship, aggregate, binding),
+         {:ok, query, dynamic} <- maybe_filter_aggregate(query, aggregate, dynamic) do
       {:ok, query, maybe_default_aggregate(query, dynamic, aggregate)}
     end
   end
 
-  defp aggregate_dynamic(query, _relationship, aggregate, binding)
-       when aggregate.kind in [:sum, :avg, :max, :min] and is_atom(aggregate.field) do
-    field = Ecto.Query.dynamic(field(as(^binding), ^aggregate.field))
-
-    dynamic =
-      case aggregate.kind do
-        :sum -> Ecto.Query.dynamic(sum(^field))
-        :avg -> Ecto.Query.dynamic(avg(^field))
-        :max -> Ecto.Query.dynamic(max(^field))
-        :min -> Ecto.Query.dynamic(min(^field))
-      end
-
-    with {:ok, query, dynamic} <- maybe_filter_aggregate(query, aggregate, dynamic) do
+  defp aggregate_dynamic(query, relationship, aggregate, _binding)
+       when aggregate.kind in [:sum, :avg, :max, :min] do
+    with {:ok, query, field} <-
+           AshSql.Aggregate.field_expression(query, aggregate, relationship.destination),
+         dynamic = scalar_aggregate_dynamic(aggregate.kind, field),
+         {:ok, query, dynamic} <- maybe_filter_aggregate(query, aggregate, dynamic) do
       {:ok, query, maybe_default_aggregate(query, dynamic, aggregate)}
     end
   end
@@ -1459,31 +1546,36 @@ defmodule AshSql.Aggregate.Grouped do
      "AshSql cannot load aggregate #{inspect(aggregate.name)} with field #{inspect(aggregate.field)}"}
   end
 
-  defp count_dynamic(relationship, %{field: nil} = aggregate, binding) do
-    if count_distinct?(aggregate) do
-      count_field = count_field(relationship, aggregate)
+  defp scalar_aggregate_dynamic(:sum, field), do: Ecto.Query.dynamic(sum(^field))
+  defp scalar_aggregate_dynamic(:avg, field), do: Ecto.Query.dynamic(avg(^field))
+  defp scalar_aggregate_dynamic(:max, field), do: Ecto.Query.dynamic(max(^field))
+  defp scalar_aggregate_dynamic(:min, field), do: Ecto.Query.dynamic(min(^field))
 
-      Ecto.Query.dynamic(count(field(as(^binding), ^count_field), :distinct))
+  defp count_dynamic(query, relationship, %{field: nil} = aggregate, binding) do
+    if count_distinct?(aggregate) do
+      count_field = fieldless_count_field(relationship)
+
+      {:ok, query, Ecto.Query.dynamic(count(field(as(^binding), ^count_field), :distinct))}
     else
-      Ecto.Query.dynamic(count())
+      {:ok, query, Ecto.Query.dynamic(count())}
     end
   end
 
-  defp count_dynamic(relationship, aggregate, binding) do
-    count_field = count_field(relationship, aggregate)
+  defp count_dynamic(query, relationship, aggregate, _binding) do
+    with {:ok, query, field} <-
+           AshSql.Aggregate.field_expression(query, aggregate, relationship.destination) do
+      dynamic =
+        if count_distinct?(aggregate) do
+          Ecto.Query.dynamic(count(^field, :distinct))
+        else
+          Ecto.Query.dynamic(count(^field))
+        end
 
-    if count_distinct?(aggregate) do
-      Ecto.Query.dynamic(count(field(as(^binding), ^count_field), :distinct))
-    else
-      Ecto.Query.dynamic(count(field(as(^binding), ^count_field)))
+      {:ok, query, dynamic}
     end
   end
 
-  defp count_field(_relationship, %{field: field}) when is_atom(field) and not is_nil(field) do
-    field
-  end
-
-  defp count_field(relationship, _aggregate) do
+  defp fieldless_count_field(relationship) do
     relationship.destination
     |> Ash.Resource.Info.primary_key()
     |> List.first()

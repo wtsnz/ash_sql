@@ -28,6 +28,7 @@ defmodule AshSql.Implementation do
               {list(term), term} | list(term)
 
   @callback list_aggregate(Ash.Resource.t()) :: String.t() | nil
+  @callback grouped_list_aggregate(term, include_nil? :: boolean) :: term | nil
 
   @callback multicolumn_distinct?() :: boolean
 
@@ -52,6 +53,7 @@ defmodule AshSql.Implementation do
       def expr(_, _, _, _, _, _), do: :error
       def simple_join_first_aggregates(_), do: []
       def list_aggregate(_), do: nil
+      def grouped_list_aggregate(_, _), do: nil
       def multicolumn_distinct?, do: true
       def require_ash_functions_for_or_and_and?, do: false
       def require_extension_for_citext, do: false
@@ -91,6 +93,7 @@ defmodule AshSql.Implementation do
                      type_expr: 2,
                      storage_type: 2,
                      list_aggregate: 1,
+                     grouped_list_aggregate: 2,
                      multicolumn_distinct?: 0
     end
   end

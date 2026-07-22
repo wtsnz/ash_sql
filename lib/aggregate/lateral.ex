@@ -12,17 +12,6 @@ defmodule AshSql.Aggregate.Lateral do
                           Map.put(acc, :"aggregate_#{i}", :"aggregate_#{i + 1}")
                         end)
 
-  def add_aggregates(%AshSql.Aggregate.Context{} = context, aggregates) do
-    add_aggregates(
-      context.query,
-      aggregates,
-      context.resource,
-      context.select?,
-      context.source_binding,
-      context.root_data
-    )
-  end
-
   def add_aggregates(
         query,
         aggregates,
