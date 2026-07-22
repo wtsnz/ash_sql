@@ -96,12 +96,13 @@ defmodule AshSql.Aggregate.Grouped.Query do
   end
 
   defp aggregate_base_query(query) do
-    if query.distinct || query.limit do
+    if query.distinct || query.limit || query.offset do
       query =
         query
         |> Ecto.Query.exclude(:select)
-        |> Ecto.Query.exclude(:order_by)
         |> Map.put(:windows, [])
+        |> maybe_add_offset_limit()
+        |> maybe_exclude_subquery_order()
 
       from(row in subquery(query), as: ^query.__ash_bindings__.root_binding)
       |> Map.put(:__ash_bindings__, query.__ash_bindings__)
@@ -238,6 +239,16 @@ defmodule AshSql.Aggregate.Grouped.Query do
 
   defp maybe_default_value(nil, %{default_value: default_value}), do: default_value
   defp maybe_default_value(value, _aggregate), do: value
+
+  defp maybe_add_offset_limit(%{limit: nil, offset: offset} = query) when not is_nil(offset),
+    do: Ecto.Query.limit(query, -1)
+
+  defp maybe_add_offset_limit(query), do: query
+
+  defp maybe_exclude_subquery_order(%{limit: nil, offset: nil} = query),
+    do: Ecto.Query.exclude(query, :order_by)
+
+  defp maybe_exclude_subquery_order(query), do: query
 
   defp maybe_sort_first(query, []), do: query
   defp maybe_sort_first(query, order_by), do: Ecto.Query.order_by(query, ^order_by)
