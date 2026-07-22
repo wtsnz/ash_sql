@@ -42,6 +42,7 @@ defmodule AshSql.Implementation do
               {list(term), term} | list(term)
 
   @callback list_aggregate(Ash.Resource.t()) :: String.t() | nil
+  @callback grouped_list_aggregate(term, include_nil? :: boolean) :: term | nil
 
   @callback multicolumn_distinct?() :: boolean
 
@@ -53,6 +54,7 @@ defmodule AshSql.Implementation do
   @callback strpos_function() :: String.t()
   @callback type_expr(expr :: term, type :: term) :: term
   @callback ref_cast_type(type :: term) :: term
+  @callback aggregate_strategy(Ash.Resource.t()) :: :lateral | :grouped
 
   @optional_callbacks determine_types: 3
 
@@ -67,6 +69,7 @@ defmodule AshSql.Implementation do
       def list_expr(_, _, _, _, _, _), do: :error
       def simple_join_first_aggregates(_), do: []
       def list_aggregate(_), do: nil
+      def grouped_list_aggregate(_, _), do: nil
       def multicolumn_distinct?, do: true
       def require_ash_functions_for_or_and_and?, do: false
       def require_extension_for_citext, do: false
@@ -74,6 +77,7 @@ defmodule AshSql.Implementation do
       def ilike?, do: true
       def equals_any?, do: true
       def storage_type(_, _), do: nil
+      def aggregate_strategy(_resource), do: :lateral
 
       # The cast type to use when casting a bare column reference, as opposed
       # to a value or a computed expression. Implementations can use this to
@@ -109,10 +113,12 @@ defmodule AshSql.Implementation do
                      require_ash_functions_for_or_and_and?: 0,
                      require_extension_for_citext: 0,
                      simple_join_first_aggregates: 1,
+                     aggregate_strategy: 1,
                      type_expr: 2,
                      ref_cast_type: 1,
                      storage_type: 2,
                      list_aggregate: 1,
+                     grouped_list_aggregate: 2,
                      multicolumn_distinct?: 0
     end
   end
