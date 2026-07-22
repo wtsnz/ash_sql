@@ -9,7 +9,7 @@ defmodule AshSql.AggregateQuery do
     original_query =
       AshSql.Bindings.default_bindings(original_query, resource, implementation)
 
-    AshSql.Aggregate.Lateral.Query.run_aggregate_query(
+    strategy(original_query, resource).run_aggregate_query(
       original_query,
       aggregates,
       resource,
@@ -25,5 +25,12 @@ defmodule AshSql.AggregateQuery do
       cant_group,
       implementation
     )
+  end
+
+  defp strategy(query, resource) do
+    case query.__ash_bindings__.sql_behaviour.aggregate_strategy(resource) do
+      :lateral -> AshSql.Aggregate.Lateral.Query
+      :grouped -> AshSql.Aggregate.Grouped.Query
+    end
   end
 end
