@@ -36,12 +36,12 @@ defmodule AshSql.AggregateQuery do
 
       {:ok, query} ->
         query =
-          if query.distinct || query.limit do
+          if query.distinct || query.limit || query.offset do
             query =
               query
               |> Ecto.Query.exclude(:select)
-              |> Ecto.Query.exclude(:order_by)
               |> Map.put(:windows, [])
+              |> maybe_exclude_subquery_order()
 
             from(row in subquery(query), as: ^query.__ash_bindings__.root_binding, select: %{})
           else
@@ -99,12 +99,12 @@ defmodule AshSql.AggregateQuery do
           end
 
         filtered =
-          if filtered.distinct || filtered.limit do
+          if filtered.distinct || filtered.limit || filtered.offset do
             filtered =
               filtered
               |> Ecto.Query.exclude(:select)
-              |> Ecto.Query.exclude(:order_by)
               |> Map.put(:windows, [])
+              |> maybe_exclude_subquery_order()
 
             from(row in subquery(filtered), as: ^query.__ash_bindings__.root_binding, select: %{})
           else
@@ -169,12 +169,12 @@ defmodule AshSql.AggregateQuery do
           end
 
         filtered =
-          if filtered.limit do
+          if filtered.limit || filtered.offset do
             filtered =
               filtered
               |> Ecto.Query.exclude(:select)
-              |> Ecto.Query.exclude(:order_by)
               |> Map.put(:windows, [])
+              |> maybe_exclude_subquery_order()
 
             from(row in subquery(filtered), as: ^query.__ash_bindings__.root_binding, select: %{})
           else
@@ -255,4 +255,9 @@ defmodule AshSql.AggregateQuery do
         )
     end)
   end
+
+  defp maybe_exclude_subquery_order(%{limit: nil, offset: nil} = query),
+    do: Ecto.Query.exclude(query, :order_by)
+
+  defp maybe_exclude_subquery_order(query), do: query
 end
