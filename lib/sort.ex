@@ -338,7 +338,7 @@ defmodule AshSql.Sort do
         end)
         |> case do
           {:ok, [], query} ->
-            if type == :return do
+            if type in [:return, :expressions] do
               {:ok, [], query}
             else
               {:ok, query}
@@ -346,6 +346,9 @@ defmodule AshSql.Sort do
 
           {:ok, sort_exprs, query} ->
             case type do
+              :expressions ->
+                {:ok, sort_exprs, query}
+
               :return ->
                 {:ok, order_to_fragments(sort_exprs), query}
 
