@@ -11,6 +11,17 @@ See [Conventional Commits](Https://conventionalcommits.org) for commit guideline
 
 <!-- changelog -->
 
+## Unreleased
+
+### Features:
+
+* add strategy-aware aggregate dispatch with lateral and grouped aggregate implementations
+
+### Improvements:
+
+* add grouped query aggregate support for root SQLite-compatible aggregate kinds
+* declare `:jason` as a direct dependency for grouped list aggregate defaults
+
 ## [v0.7.6](https://github.com/ash-project/ash_sql/compare/v0.7.5...v0.7.6) (2026-09-18)
 
 
