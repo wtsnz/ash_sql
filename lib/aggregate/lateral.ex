@@ -6,7 +6,6 @@ defmodule AshSql.Aggregate.Lateral do
   @moduledoc false
 
   require Ecto.Query
-  require Ash.Query
   import Ecto.Query, only: [from: 2, subquery: 1]
 
   @next_aggregate_names Enum.reduce(0..999, %{}, fn i, acc ->

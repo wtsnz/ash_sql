@@ -103,9 +103,9 @@ defmodule AshSql.Aggregate.Grouped do
     true
   end
 
-  defp supported?(%{kind: kind, related?: related?, relationship_path: path})
+  defp supported?(%{kind: kind, related?: true, relationship_path: path})
        when kind in @supported_aggregate_kinds do
-    related? != false && match?([_ | _], path)
+    match?([_ | _], path)
   end
 
   defp supported?(_), do: false
@@ -1529,22 +1529,6 @@ defmodule AshSql.Aggregate.Grouped do
           {:ok, AshSql.Bindings.merge_expr_accumulator(query, acc),
            Ecto.Query.dynamic(filter(^dynamic, ^filter_dynamic))}
         end
-    end
-  end
-
-  defp maybe_default_aggregate(query, dynamic, %{kind: :list, default_value: nil, type: type})
-       when not is_nil(type) do
-    sql_behaviour = query.__ash_bindings__.sql_behaviour
-
-    case sqlite_aggregate_type(sql_behaviour, type) do
-      nil ->
-        dynamic
-
-      type ->
-        default = list_default_expr([], type, sql_behaviour)
-
-        Ecto.Query.dynamic(coalesce(^dynamic, ^default))
-        |> sql_behaviour.type_expr(type)
     end
   end
 
