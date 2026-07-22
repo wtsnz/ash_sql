@@ -48,18 +48,23 @@ defmodule AshSql.Aggregate.Grouped.Query do
 
   defp run_single_aggregate(original_query, %{kind: :first} = aggregate, resource, implementation) do
     with {:ok, query} <- filtered_query(original_query, aggregate, resource),
-         {:ok, field} <- aggregate_field(aggregate) do
+         {:ok, field} <- aggregate_field(aggregate),
+         {:ok, order_by} <- first_order_by(aggregate) do
       query =
         query
         |> Ecto.Query.exclude(:select)
         |> Ecto.Query.exclude(:order_by)
         |> Map.put(:windows, [])
-        |> maybe_sort_first(aggregate)
+        |> maybe_filter_first_nil_values(aggregate, field)
+        |> maybe_sort_first(order_by)
         |> Ecto.Query.limit(1)
         |> Ecto.Query.select([row], field(row, ^field))
 
       repo = AshSql.dynamic_repo(resource, implementation, query)
-      {:ok, repo.one(query, AshSql.repo_opts(repo, implementation, nil, nil, resource))}
+
+      value = repo.one(query, AshSql.repo_opts(repo, implementation, nil, nil, resource))
+
+      {:ok, maybe_default_value(value, aggregate)}
     end
   end
 
@@ -190,17 +195,46 @@ defmodule AshSql.Aggregate.Grouped.Query do
     Ecto.Query.dynamic(coalesce(^dynamic, ^aggregate.default_value))
   end
 
-  defp maybe_sort_first(query, %{query: %{sort: sort}}) when sort not in [nil, []] do
-    order_by =
-      sort
-      |> List.wrap()
-      |> Enum.map(fn
-        {field, order} -> {order, field}
-        field when is_atom(field) -> {:asc, field}
-      end)
+  defp first_order_by(%{query: %{sort: sort}}) when sort in [nil, []], do: {:ok, []}
 
-    Ecto.Query.order_by(query, ^order_by)
+  defp first_order_by(%{query: %{sort: sort}} = aggregate) do
+    sort
+    |> List.wrap()
+    |> Enum.reduce_while({:ok, []}, fn
+      {field, order}, {:ok, acc} when is_atom(field) and is_atom(order) ->
+        {:cont, {:ok, [{ecto_sort_order(order), field} | acc]}}
+
+      field, {:ok, acc} when is_atom(field) ->
+        {:cont, {:ok, [{:asc, field} | acc]}}
+
+      invalid_sort, _acc ->
+        {:halt,
+         {:error,
+          "AshSql grouped query first aggregate #{inspect(aggregate.name)} cannot use sort #{inspect(invalid_sort)}"}}
+    end)
+    |> case do
+      {:ok, order_by} -> {:ok, Enum.reverse(order_by)}
+      {:error, error} -> {:error, error}
+    end
   end
 
-  defp maybe_sort_first(query, _aggregate), do: query
+  defp maybe_filter_first_nil_values(query, %{include_nil?: true}, _field), do: query
+
+  defp maybe_filter_first_nil_values(query, _aggregate, field) do
+    Ecto.Query.where(query, [row], not is_nil(field(row, ^field)))
+  end
+
+  defp maybe_default_value(nil, %{default_value: default_value}), do: default_value
+  defp maybe_default_value(value, _aggregate), do: value
+
+  defp maybe_sort_first(query, []), do: query
+  defp maybe_sort_first(query, order_by), do: Ecto.Query.order_by(query, ^order_by)
+
+  defp ecto_sort_order(:asc), do: :asc
+  defp ecto_sort_order(:desc), do: :desc
+  defp ecto_sort_order(:asc_nils_first), do: :asc_nulls_first
+  defp ecto_sort_order(:asc_nils_last), do: :asc_nulls_last
+  defp ecto_sort_order(:desc_nils_first), do: :desc_nulls_first
+  defp ecto_sort_order(:desc_nils_last), do: :desc_nulls_last
+  defp ecto_sort_order(other), do: other
 end
