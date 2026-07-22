@@ -18,7 +18,7 @@ defmodule AshSql.Aggregate do
     do: {:ok, query}
 
   def add_aggregates(query, aggregates, resource, select?, source_binding, root_data) do
-    AshSql.Aggregate.Lateral.add_aggregates(
+    strategy(query, resource).add_aggregates(
       query,
       aggregates,
       resource,
@@ -76,8 +76,70 @@ defmodule AshSql.Aggregate do
     AshSql.Aggregate.Lateral.aggregate_field(aggregate, resource, query)
   end
 
+  def field_expression(query, aggregate, resource, relationship_path \\ []) do
+    ref = aggregate_field_ref(aggregate, resource, relationship_path, query, nil)
+
+    with {:ok, query} <- add_field_dependencies(query, ref, resource) do
+      case ref do
+        nil ->
+          {:ok, query, nil}
+
+        ref ->
+          case AshSql.Expr.dynamic_expr(query, ref, query.__ash_bindings__, false) do
+            {:error, error} ->
+              {:error, error}
+
+            {expression, accumulator} ->
+              {:ok, AshSql.Bindings.merge_expr_accumulator(query, accumulator), expression}
+          end
+      end
+    end
+  end
+
   def wrap_in_subquery_for_aggregates(query) do
     AshSql.Aggregate.Lateral.wrap_in_subquery_for_aggregates(query)
   end
 
+  defp add_field_dependencies(query, nil, _resource), do: {:ok, query}
+
+  defp add_field_dependencies(query, ref, resource) do
+    with {:ok, query} <- add_field_aggregates(query, ref.attribute, resource),
+         {:ok, query} <- AshSql.Join.join_all_relationships(query, ref) do
+      {:ok, query}
+    end
+  end
+
+  defp add_field_aggregates(query, %struct{} = aggregate, resource)
+       when struct in [Ash.Query.Aggregate, Ash.Resource.Aggregate] do
+    add_aggregates(
+      query,
+      [aggregate],
+      resource,
+      false,
+      query.__ash_bindings__.root_binding
+    )
+  end
+
+  defp add_field_aggregates(query, %Ash.Query.Calculation{} = calculation, resource) do
+    used_aggregates = Ash.Filter.used_aggregates(calculation, [])
+
+    with {:ok, query} <- AshSql.Join.join_all_relationships(query, calculation, []) do
+      add_aggregates(
+        query,
+        used_aggregates,
+        resource,
+        false,
+        query.__ash_bindings__.root_binding
+      )
+    end
+  end
+
+  defp add_field_aggregates(query, _field, _resource), do: {:ok, query}
+
+  defp strategy(query, resource) do
+    case query.__ash_bindings__.sql_behaviour.aggregate_strategy(resource) do
+      :lateral -> AshSql.Aggregate.Lateral
+      :grouped -> AshSql.Aggregate.Grouped
+    end
+  end
 end
