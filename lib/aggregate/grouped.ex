@@ -128,25 +128,29 @@ defmodule AshSql.Aggregate.Grouped do
   defp aggregate_group_key(aggregate) do
     read_action = (aggregate.query.action && aggregate.query.action.name) || aggregate.read_action
 
+    preparation_key =
+      {read_action, aggregate.query.arguments, aggregate.query.context, aggregate.query.tenant,
+       aggregate.query.domain}
+
     relationship_key =
       case aggregate do
         %{related?: false, query: %{resource: resource}} -> {:unrelated, resource}
         %{relationship_path: relationship_path} -> {:related, relationship_path}
       end
 
-    {relationship_key, read_action, aggregate.join_filters || %{},
+    {relationship_key, preparation_key, aggregate.join_filters || %{},
      aggregate_filter_group_key(aggregate), aggregate_kind_group_key(aggregate)}
   end
 
   defp aggregate_relationship_path(
-         {{:related, relationship_path}, _read_action, _join_filters, _aggregate_filter_group,
+         {{:related, relationship_path}, _preparation, _join_filters, _aggregate_filter_group,
           _kind_group}
        ) do
     relationship_path
   end
 
   defp aggregate_relationship_path(
-         {{:unrelated, _resource}, _read_action, _join_filters, _aggregate_filter_group,
+         {{:unrelated, _resource}, _preparation, _join_filters, _aggregate_filter_group,
           _kind_group}
        ) do
     []
@@ -436,10 +440,11 @@ defmodule AshSql.Aggregate.Grouped do
          context
        ) do
     binding = query.__ash_bindings__.current
+    input_query = aggregate_input_query(query, hd(aggregates))
 
     with :ok <- validate_aggregate_filters(aggregates),
          {:ok, aggregate_query} <-
-           aggregate_query(query, relationships, aggregates, binding) do
+           aggregate_query(input_query, relationships, aggregates, binding) do
       aggregate_query = Ecto.Query.subquery(aggregate_query)
       source_binding = context.source_binding
 
@@ -467,6 +472,26 @@ defmodule AshSql.Aggregate.Grouped do
 
       {:ok, query, dynamics}
     end
+  end
+
+  defp aggregate_input_query(query, aggregate) do
+    shared_context = aggregate.query.context[:shared] || %{}
+
+    shared_context =
+      if AshSql.Join.context_multitenancy(aggregate.query) == :bypass_all do
+        # Ash may clear the shared wrapper after merging it into private context.
+        Ash.Helpers.deep_merge_maps(shared_context, %{private: %{multitenancy: :bypass_all}})
+      else
+        shared_context
+      end
+
+    # Shared aggregate context applies along the whole path, without changing
+    # the parent query or the context used to build sibling aggregates.
+    update_in(query.__ash_bindings__.context, fn context ->
+      context
+      |> Ash.Helpers.deep_merge_maps(%{shared: shared_context})
+      |> Ash.Helpers.deep_merge_maps(shared_context)
+    end)
   end
 
   defp aggregate_query(parent_query, [relationship], [%{kind: kind} = aggregate], binding)
@@ -870,52 +895,36 @@ defmodule AshSql.Aggregate.Grouped do
   end
 
   defp related_query(parent_query, relationship, aggregate, binding, relationship_path) do
-    aggregate.query
-    |> Ash.Query.unset([:filter, :sort, :distinct, :select, :limit, :offset])
-    |> Ash.Query.set_context(relationship.context)
-    |> Ash.Query.do_filter(relationship.filter, parent_stack: [relationship.source])
-    |> Ash.Query.do_filter(join_filter(aggregate, relationship_path))
-    |> Ash.Query.set_context(%{
-      data_layer: %{
-        start_bindings_at: binding,
-        parent_bindings: parent_query.__ash_bindings__
-      }
-    })
-    |> Ash.Query.data_layer_query(run_return_query?: false)
-    |> case do
-      {:ok, query} ->
-        query
-        |> Ecto.Query.exclude(:select)
-        |> Ecto.Query.exclude(:order_by)
-        |> limit_relationship_rows(relationship)
+    read_action = (aggregate.query.action && aggregate.query.action.name) || aggregate.read_action
 
-      {:error, error} ->
-        {:error, error}
+    arguments =
+      if relationship.read_action == read_action do
+        Map.merge(relationship.read_action_arguments || %{}, aggregate.query.arguments)
+      else
+        aggregate.query.arguments
+      end
+
+    relationship = %{relationship | read_action: read_action, read_action_arguments: arguments}
+
+    with {:ok, query} <-
+           prepared_relationship_query(parent_query, relationship, binding,
+             source_query: aggregate.query,
+             apply_filter: join_filter(aggregate, relationship_path)
+           ) do
+      limit_relationship_rows(query, relationship)
     end
   end
 
   defp related_window_query(parent_query, relationship, aggregate, binding, relationship_path) do
-    aggregate.query
-    |> Ash.Query.unset([:sort, :distinct, :select, :limit, :offset])
-    |> Ash.Query.set_context(relationship.context)
-    |> Ash.Query.do_filter(relationship.filter, parent_stack: [relationship.source])
-    |> Ash.Query.do_filter(join_filter(aggregate, relationship_path))
-    |> Ash.Query.set_context(%{
-      data_layer: %{
-        start_bindings_at: binding,
-        parent_bindings: parent_query.__ash_bindings__
-      }
-    })
-    |> Ash.Query.data_layer_query(run_return_query?: false)
-    |> case do
-      {:ok, query} ->
-        query
-        |> Ecto.Query.exclude(:select)
-        |> Ecto.Query.exclude(:order_by)
-        |> limit_relationship_rows(relationship)
-
-      {:error, error} ->
-        {:error, error}
+    with {:ok, query} <-
+           related_query(parent_query, relationship, aggregate, binding, relationship_path) do
+      # Aggregate filters apply to the bounded relationship, not to the rows
+      # used to choose that relationship's limit/offset window.
+      case aggregate.query.filter do
+        nil -> {:ok, query}
+        %{expression: nil} -> {:ok, query}
+        filter -> AshSql.Filter.filter(query, filter, relationship.destination)
+      end
     end
   end
 
@@ -1039,32 +1048,11 @@ defmodule AshSql.Aggregate.Grouped do
   end
 
   defp intermediate_query(parent_query, relationship, binding, aggregate, relationship_path) do
-    read_action =
-      relationship.read_action ||
-        Ash.Resource.Info.primary_action!(relationship.destination, :read).name
-
-    relationship.destination
-    |> Ash.Query.for_read(read_action)
-    |> Ash.Query.unset([:sort, :distinct, :select, :limit, :offset])
-    |> Ash.Query.set_context(relationship.context)
-    |> Ash.Query.do_filter(relationship.filter, parent_stack: [relationship.source])
-    |> Ash.Query.do_filter(join_filter(aggregate, relationship_path))
-    |> Ash.Query.set_context(%{
-      data_layer: %{
-        start_bindings_at: binding,
-        parent_bindings: parent_query.__ash_bindings__
-      }
-    })
-    |> Ash.Query.data_layer_query(run_return_query?: false)
-    |> case do
-      {:ok, query} ->
-        query
-        |> Ecto.Query.exclude(:select)
-        |> Ecto.Query.exclude(:order_by)
-        |> limit_relationship_rows(relationship)
-
-      {:error, error} ->
-        {:error, error}
+    with {:ok, query} <-
+           prepared_relationship_query(parent_query, relationship, binding,
+             apply_filter: join_filter(aggregate, relationship_path)
+           ) do
+      limit_relationship_rows(query, relationship)
     end
   end
 
@@ -1072,16 +1060,19 @@ defmodule AshSql.Aggregate.Grouped do
     join_relationship =
       Ash.Resource.Info.relationship(relationship.source, relationship.join_relationship)
 
-    relationship.through
-    |> Ash.Query.new()
+    prepared_relationship_query(parent_query, join_relationship, binding)
+  end
+
+  defp prepared_relationship_query(parent_query, relationship, binding, opts \\ []) do
+    relationship
+    |> AshSql.Join.related_ash_query(parent_query, Keyword.put(opts, :start_bindings_at, binding))
+    |> Ash.Query.unset(:sort)
     |> Ash.Query.set_context(%{
       data_layer: %{
         start_bindings_at: binding,
         parent_bindings: parent_query.__ash_bindings__
       }
     })
-    |> Ash.Query.set_context(join_relationship.context)
-    |> Ash.Query.do_filter(join_relationship.filter)
     |> Ash.Query.data_layer_query(run_return_query?: false)
     |> case do
       {:ok, query} ->
@@ -1682,10 +1673,11 @@ defmodule AshSql.Aggregate.Grouped do
     end)
   end
 
-  defp loaded_aggregate_dynamic(aggregate, binding, _sql_behaviour) do
+  defp loaded_aggregate_dynamic(aggregate, binding, sql_behaviour) do
     aggregate
     |> loaded_aggregate_field(binding)
     |> maybe_default_loaded_aggregate(aggregate)
+    |> then(&maybe_type_dynamic(sql_behaviour, &1, aggregate))
   end
 
   defp maybe_default_loaded_aggregate(dynamic, %{default_value: nil}), do: dynamic
