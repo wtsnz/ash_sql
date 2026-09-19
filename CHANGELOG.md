@@ -24,6 +24,8 @@ See [Conventional Commits](Https://conventionalcommits.org) for commit guideline
 
 ### Bug Fixes:
 
+* respect the implicit limit of one when aggregating `from_many?` relationships in both strategies
+
 * share relationship query preparation between aggregate strategies, preserving context, read action arguments, and attribute tenant filters
 * apply grouped aggregate filters after relationship limits while retaining read action scope before those limits
 * load grouped scalar aggregate values and defaults using their declared type and constraints

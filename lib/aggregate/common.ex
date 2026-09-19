@@ -62,6 +62,9 @@ defmodule AshSql.Aggregate.Common do
   def attachment_path(nil), do: []
   def attachment_path({_, path}), do: path
 
+  def relationship_limit(%{cardinality: :one, from_many?: true}), do: 1
+  def relationship_limit(relationship), do: Map.get(relationship, :limit)
+
   def name_for(aggregate, bindings, path) do
     key = {List.wrap(bindings[:refs_at_path]) ++ path, aggregate.resource, aggregate.name}
 
