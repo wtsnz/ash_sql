@@ -18,14 +18,17 @@ defmodule AshSql.Aggregate do
     do: {:ok, query}
 
   def add_aggregates(query, aggregates, resource, select?, source_binding, root_data) do
-    strategy(query, resource).add_aggregates(
-      query,
-      aggregates,
-      resource,
-      select?,
-      source_binding,
-      root_data
-    )
+    with {:ok, query, aggregates} <-
+           AshSql.Aggregate.Common.normalize(query, aggregates, resource, root_data) do
+      strategy(query, resource).add_aggregates(
+        query,
+        aggregates,
+        resource,
+        select?,
+        source_binding,
+        root_data
+      )
+    end
   end
 
   def extract_shared_filters(aggregates) do
@@ -33,7 +36,7 @@ defmodule AshSql.Aggregate do
   end
 
   def next_aggregate_name(index) do
-    AshSql.Aggregate.Lateral.next_aggregate_name(index)
+    AshSql.Aggregate.Common.next_aggregate_name(index)
   end
 
   def can_group?(resource, aggregate, query) do
@@ -103,7 +106,7 @@ defmodule AshSql.Aggregate do
   defdelegate limit_one_first_aggregate?(resource, aggregate), to: AshSql.Aggregate.Lateral
 
   defdelegate resource_aggregate_to_aggregate(resource, aggregate, opts \\ []),
-    to: AshSql.Aggregate.Lateral
+    to: AshSql.Aggregate.Common
 
   defp add_field_dependencies(query, nil, _resource), do: {:ok, query}
 

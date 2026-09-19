@@ -8,10 +8,6 @@ defmodule AshSql.Aggregate.Lateral do
   require Ecto.Query
   import Ecto.Query, only: [from: 2, subquery: 1]
 
-  @next_aggregate_names Enum.reduce(0..999, %{}, fn i, acc ->
-                          Map.put(acc, :"aggregate_#{i}", :"aggregate_#{i + 1}")
-                        end)
-
   def add_aggregates(
         query,
         aggregates,
@@ -24,367 +20,324 @@ defmodule AshSql.Aggregate.Lateral do
   def add_aggregates(query, [], _, _, _, _), do: {:ok, query}
 
   def add_aggregates(query, aggregates, resource, select?, source_binding, root_data) do
-    case resource_aggregates_to_aggregates(resource, query, aggregates) do
-      {:ok, aggregates} ->
-        root_data_path =
-          case root_data do
-            {_, path} ->
-              path
+    root_data_path =
+      case root_data do
+        {_, path} ->
+          path
 
-            _ ->
-              []
-          end
+        _ ->
+          []
+      end
 
-        tenant =
-          case Enum.at(aggregates, 0) do
-            %{context: %{tenant: tenant}} ->
-              Ash.ToTenant.to_tenant(tenant, resource)
+    tenant =
+      case Enum.at(aggregates, 0) do
+        %{context: %{tenant: tenant}} ->
+          Ash.ToTenant.to_tenant(tenant, resource)
 
-            _ ->
-              nil
-          end
+        _ ->
+          nil
+      end
 
-        {query, aggregates} =
-          Enum.reduce(
-            aggregates,
-            {query, []},
-            fn aggregate, {query, aggregates} ->
-              if is_atom(aggregate.name) do
-                existing_agg = query.__ash_bindings__.aggregate_defs[aggregate.name]
+    {already_computed_aggregates, remaining_aggregates} =
+      aggregates
+      |> Enum.uniq_by(& &1.name)
+      |> Enum.split_with(&already_added?(&1, query.__ash_bindings__, root_data_path))
 
-                if existing_agg && different_queries?(existing_agg.query, aggregate.query) do
-                  {query, name} = use_aggregate_name(query, aggregate.name)
-                  {query, [%{aggregate | name: name} | aggregates]}
-                else
-                  {query, [aggregate | aggregates]}
-                end
+    query =
+      if Enum.any?(already_computed_aggregates) && select? do
+        query.__ash_bindings__.bindings
+        |> Enum.filter(fn
+          {_binding, %{type: :aggregate}} -> true
+          _ -> false
+        end)
+        |> Enum.reduce(query, fn {agg_binding, %{aggregates: aggs}}, q ->
+          q = update_in(q.__ash_bindings__, &Map.put_new(&1, :select_aggregates, []))
+
+          Enum.reduce(aggs, q, fn agg, q ->
+            if Enum.any?(already_computed_aggregates, &(&1.name == agg.name)) do
+              q =
+                update_in(q.__ash_bindings__.select_aggregates, fn select_aggs ->
+                  [agg.name | select_aggs]
+                end)
+
+              if agg.default_value do
+                from(row in q,
+                  select_merge: %{
+                    ^agg.name => coalesce(field(as(^agg_binding), ^agg.name), ^agg.default_value)
+                  }
+                )
               else
-                {query, name} = use_aggregate_name(query, aggregate.name)
-
-                {query, [%{aggregate | name: name} | aggregates]}
-              end
-            end
-          )
-
-        {already_computed_aggregates, remaining_aggregates} =
-          aggregates
-          |> Enum.uniq_by(& &1.name)
-          |> Enum.split_with(&already_added?(&1, query.__ash_bindings__, []))
-
-        query =
-          if Enum.any?(already_computed_aggregates) && select? do
-            query.__ash_bindings__.bindings
-            |> Enum.filter(fn
-              {_binding, %{type: :aggregate}} -> true
-              _ -> false
-            end)
-            |> Enum.reduce(query, fn {agg_binding, %{aggregates: aggs}}, q ->
-              q = update_in(q.__ash_bindings__, &Map.put_new(&1, :select_aggregates, []))
-
-              Enum.reduce(aggs, q, fn agg, q ->
-                if Enum.any?(already_computed_aggregates, &(&1.name == agg.name)) do
-                  q =
-                    update_in(q.__ash_bindings__.select_aggregates, fn select_aggs ->
-                      [agg.name | select_aggs]
-                    end)
-
-                  if agg.default_value do
-                    from(row in q,
-                      select_merge: %{
-                        ^agg.name =>
-                          coalesce(field(as(^agg_binding), ^agg.name), ^agg.default_value)
-                      }
-                    )
-                  else
-                    from(row in q,
-                      select_merge: %{^agg.name => field(as(^agg_binding), ^agg.name)}
-                    )
-                  end
-                else
-                  q
-                end
-              end)
-            end)
-          else
-            query
-          end
-
-        query =
-          if (query.limit || query.offset || query.distinct) && root_data_path == [] && select? &&
-               !query.__ash_bindings__[:lateral_join?] &&
-               Enum.any?(
-                 remaining_aggregates,
-                 &(not optimizable_first_aggregate?(resource, &1, query))
-               ) do
-            wrap_in_subquery_for_aggregates(query)
-          else
-            query
-          end
-
-        query =
-          if root_data_path == [] do
-            query
-            |> Map.update!(:__ash_bindings__, fn bindings ->
-              bindings
-              |> Map.update!(:aggregate_defs, fn aggregate_defs ->
-                Map.merge(aggregate_defs, Map.new(aggregates, &{&1.name, &1}))
-              end)
-            end)
-          else
-            query
-          end
-
-        result =
-          remaining_aggregates
-          |> Enum.group_by(fn aggregate ->
-            expanded_path =
-              aggregate.resource
-              |> AshSql.Join.relationship_path_to_relationships(aggregate.relationship_path)
-              |> Enum.map(& &1.name)
-
-            {expanded_path, aggregate.resource, aggregate.join_filters || %{},
-             aggregate.query.action.name}
-          end)
-          |> Enum.flat_map(fn {{path, resource, join_filters, read_action}, aggregates} ->
-            {can_group, cant_group} =
-              Enum.split_with(aggregates, &can_group?(resource, &1, query))
-
-            [{{path, resource, join_filters, read_action}, can_group}] ++
-              Enum.map(cant_group, &{{path, resource, join_filters, read_action}, [&1]})
-          end)
-          |> Enum.reject(fn
-            {_, []} ->
-              true
-
-            _ ->
-              false
-          end)
-          |> Enum.reduce_while(
-            {:ok, query, []},
-            fn {{path, resource, join_filters, read_action}, aggregates},
-               {:ok, query, dynamics} ->
-              related = Ash.Resource.Info.related(resource, path)
-              read_action = Ash.Resource.Info.action(related, read_action)
-
-              if read_action.modify_query do
-                raise """
-                Data layer does not currently support aggregates over read actions that use `modify_query`.
-
-                Resource: #{inspect(resource)}
-                Relationship Path: #{inspect(path)}
-                Action: #{read_action.name}
-                """
-              end
-
-              {first_relationship, relationship_path} =
-                case path do
-                  [] ->
-                    {nil, []}
-
-                  [first_relationship | rest] ->
-                    case Ash.Resource.Info.relationship(resource, first_relationship) do
-                      nil ->
-                        raise "No such relationship #{inspect(resource)}.#{first_relationship}. aggregates: #{inspect(aggregates)}"
-
-                      first_relationship ->
-                        if rest == [] do
-                          {override_read_action(first_relationship, read_action.name), rest}
-                        else
-                          {first_relationship, rest}
-                        end
-                    end
-                end
-
-              hydrated_agg_refs =
-                aggregates
-                |> Enum.map(&(&1.query.filter && &1.query.filter.expression))
-                |> Ash.Filter.hydrate_refs(%{
-                  resource: Enum.at(aggregates, 0).query.resource,
-                  parent_stack:
-                    if(first_relationship, do: [first_relationship.source], else: [resource])
-                })
-                |> elem(1)
-
-              parent_expr =
-                if first_relationship do
-                  first_relationship.filter
-                  |> Ash.Filter.hydrate_refs(%{
-                    resource: first_relationship.destination,
-                    parent_stack: [first_relationship.source]
-                  })
-                  |> elem(1)
-                  |> then(&[&1 | hydrated_agg_refs])
-                  |> AshSql.Join.parent_expr()
-                end
-
-              used_aggregates =
-                Ash.Filter.used_aggregates(parent_expr, [])
-
-              {:ok, query} =
-                AshSql.Aggregate.add_aggregates(
-                  query,
-                  used_aggregates,
-                  resource,
-                  false,
-                  query.__ash_bindings__.root_binding
+                from(row in q,
+                  select_merge: %{^agg.name => field(as(^agg_binding), ^agg.name)}
                 )
-
-              {:ok, query} =
-                AshSql.Join.join_all_relationships(
-                  query,
-                  parent_expr,
-                  [],
-                  nil,
-                  [],
-                  nil,
-                  true,
-                  nil,
-                  nil,
-                  true
-                )
-
-              is_single? = match?([_], aggregates)
-
-              cond do
-                is_single? &&
-                    optimizable_first_aggregate?(
-                      resource,
-                      Enum.at(aggregates, 0),
-                      query
-                    ) ->
-                  case add_first_join_aggregate(
-                         query,
-                         resource,
-                         hd(aggregates),
-                         root_data,
-                         first_relationship,
-                         source_binding
-                       ) do
-                    {:ok, query, dynamic} ->
-                      query =
-                        if select? do
-                          select_or_merge(query, hd(aggregates).name, dynamic)
-                        else
-                          query
-                        end
-
-                      {:cont, {:ok, query, dynamics}}
-
-                    {:error, error} ->
-                      {:halt, {:error, error}}
-                  end
-
-                is_single? && Enum.at(aggregates, 0).kind == :exists ->
-                  [aggregate] = aggregates
-
-                  expr =
-                    if is_nil(Map.get(aggregate.query, :filter)) do
-                      true
-                    else
-                      Map.get(aggregate.query, :filter)
-                    end
-
-                  {exists, acc} =
-                    AshSql.Expr.dynamic_expr(
-                      query,
-                      %Ash.Query.Exists{
-                        path: root_data_path ++ aggregate.relationship_path,
-                        related?: aggregate.related?,
-                        resource: aggregate.query.resource,
-                        expr: expr
-                      },
-                      query.__ash_bindings__
-                    )
-
-                  {:cont,
-                   {:ok, AshSql.Bindings.merge_expr_accumulator(query, acc),
-                    [{aggregate.load, aggregate.name, exists} | dynamics]}}
-
-                true ->
-                  tmp_query =
-                    if first_relationship && first_relationship.type == :many_to_many do
-                      put_in(query.__ash_bindings__[:lateral_join_bindings], [
-                        query.__ash_bindings__.current
-                      ])
-                      |> AshSql.Bindings.explicitly_set_binding(
-                        %{
-                          type: :left,
-                          path: [first_relationship.join_relationship]
-                        },
-                        query.__ash_bindings__.current
-                      )
-                    else
-                      query
-                    end
-
-                  start_bindings_at =
-                    if first_relationship && first_relationship.type == :many_to_many do
-                      query.__ash_bindings__.current + 1
-                    else
-                      query.__ash_bindings__.current
-                    end
-
-                  case get_subquery(
-                         resource,
-                         aggregates,
-                         is_single?,
-                         first_relationship,
-                         relationship_path,
-                         tmp_query,
-                         start_bindings_at,
-                         query,
-                         source_binding,
-                         root_data_path,
-                         tenant,
-                         join_filters
-                       ) do
-                    {:error, error} ->
-                      {:error, error}
-
-                    {:ok, subquery} ->
-                      query =
-                        join_subquery(
-                          query,
-                          subquery,
-                          first_relationship,
-                          relationship_path,
-                          aggregates,
-                          source_binding,
-                          root_data_path
-                        )
-
-                      if select? do
-                        new_dynamics =
-                          Enum.map(
-                            aggregates,
-                            &{&1.load, &1.name,
-                             select_dynamic(
-                               resource,
-                               query,
-                               &1,
-                               query.__ash_bindings__.current - 1
-                             )}
-                          )
-
-                        {:cont, {:ok, query, new_dynamics ++ dynamics}}
-                      else
-                        {:cont, {:ok, query, dynamics}}
-                      end
-                  end
               end
-            end
-          )
-
-        case result do
-          {:ok, query, dynamics} ->
-            if select? do
-              {:ok, add_aggregate_selects(query, dynamics)}
             else
-              {:ok, query}
+              q
+            end
+          end)
+        end)
+      else
+        query
+      end
+
+    query =
+      if (query.limit || query.offset || query.distinct) && root_data_path == [] && select? &&
+           !query.__ash_bindings__[:lateral_join?] &&
+           Enum.any?(
+             remaining_aggregates,
+             &(not optimizable_first_aggregate?(resource, &1, query))
+           ) do
+        wrap_in_subquery_for_aggregates(query)
+      else
+        query
+      end
+
+    result =
+      remaining_aggregates
+      |> Enum.group_by(fn aggregate ->
+        expanded_path =
+          aggregate.resource
+          |> AshSql.Join.relationship_path_to_relationships(aggregate.relationship_path)
+          |> Enum.map(& &1.name)
+
+        {expanded_path, aggregate.resource, aggregate.join_filters || %{},
+         aggregate.query.action.name}
+      end)
+      |> Enum.flat_map(fn {{path, resource, join_filters, read_action}, aggregates} ->
+        {can_group, cant_group} =
+          Enum.split_with(aggregates, &can_group?(resource, &1, query))
+
+        [{{path, resource, join_filters, read_action}, can_group}] ++
+          Enum.map(cant_group, &{{path, resource, join_filters, read_action}, [&1]})
+      end)
+      |> Enum.reject(fn
+        {_, []} ->
+          true
+
+        _ ->
+          false
+      end)
+      |> Enum.reduce_while(
+        {:ok, query, []},
+        fn {{path, resource, join_filters, read_action}, aggregates}, {:ok, query, dynamics} ->
+          related = Ash.Resource.Info.related(resource, path)
+          read_action = Ash.Resource.Info.action(related, read_action)
+
+          if read_action.modify_query do
+            raise """
+            Data layer does not currently support aggregates over read actions that use `modify_query`.
+
+            Resource: #{inspect(resource)}
+            Relationship Path: #{inspect(path)}
+            Action: #{read_action.name}
+            """
+          end
+
+          {first_relationship, relationship_path} =
+            case path do
+              [] ->
+                {nil, []}
+
+              [first_relationship | rest] ->
+                case Ash.Resource.Info.relationship(resource, first_relationship) do
+                  nil ->
+                    raise "No such relationship #{inspect(resource)}.#{first_relationship}. aggregates: #{inspect(aggregates)}"
+
+                  first_relationship ->
+                    if rest == [] do
+                      {override_read_action(first_relationship, read_action.name), rest}
+                    else
+                      {first_relationship, rest}
+                    end
+                end
             end
 
-          {:error, error} ->
-            {:error, error}
+          hydrated_agg_refs =
+            aggregates
+            |> Enum.map(&(&1.query.filter && &1.query.filter.expression))
+            |> Ash.Filter.hydrate_refs(%{
+              resource: Enum.at(aggregates, 0).query.resource,
+              parent_stack:
+                if(first_relationship, do: [first_relationship.source], else: [resource])
+            })
+            |> elem(1)
+
+          parent_expr =
+            if first_relationship do
+              first_relationship.filter
+              |> Ash.Filter.hydrate_refs(%{
+                resource: first_relationship.destination,
+                parent_stack: [first_relationship.source]
+              })
+              |> elem(1)
+              |> then(&[&1 | hydrated_agg_refs])
+              |> AshSql.Join.parent_expr()
+            end
+
+          used_aggregates =
+            Ash.Filter.used_aggregates(parent_expr, [])
+
+          {:ok, query} =
+            AshSql.Aggregate.add_aggregates(
+              query,
+              used_aggregates,
+              resource,
+              false,
+              query.__ash_bindings__.root_binding
+            )
+
+          {:ok, query} =
+            AshSql.Join.join_all_relationships(
+              query,
+              parent_expr,
+              [],
+              nil,
+              [],
+              nil,
+              true,
+              nil,
+              nil,
+              true
+            )
+
+          is_single? = match?([_], aggregates)
+
+          cond do
+            is_single? &&
+                optimizable_first_aggregate?(
+                  resource,
+                  Enum.at(aggregates, 0),
+                  query
+                ) ->
+              case add_first_join_aggregate(
+                     query,
+                     resource,
+                     hd(aggregates),
+                     root_data,
+                     first_relationship,
+                     source_binding
+                   ) do
+                {:ok, query, dynamic} ->
+                  query =
+                    if select? do
+                      select_or_merge(query, hd(aggregates).name, dynamic)
+                    else
+                      query
+                    end
+
+                  {:cont, {:ok, query, dynamics}}
+
+                {:error, error} ->
+                  {:halt, {:error, error}}
+              end
+
+            is_single? && Enum.at(aggregates, 0).kind == :exists ->
+              [aggregate] = aggregates
+
+              expr =
+                if is_nil(Map.get(aggregate.query, :filter)) do
+                  true
+                else
+                  Map.get(aggregate.query, :filter)
+                end
+
+              {exists, acc} =
+                AshSql.Expr.dynamic_expr(
+                  query,
+                  %Ash.Query.Exists{
+                    path: root_data_path ++ aggregate.relationship_path,
+                    related?: aggregate.related?,
+                    resource: aggregate.query.resource,
+                    expr: expr
+                  },
+                  query.__ash_bindings__
+                )
+
+              {:cont,
+               {:ok, AshSql.Bindings.merge_expr_accumulator(query, acc),
+                [{aggregate.load, aggregate.name, exists} | dynamics]}}
+
+            true ->
+              tmp_query =
+                if first_relationship && first_relationship.type == :many_to_many do
+                  put_in(query.__ash_bindings__[:lateral_join_bindings], [
+                    query.__ash_bindings__.current
+                  ])
+                  |> AshSql.Bindings.explicitly_set_binding(
+                    %{
+                      type: :left,
+                      path: [first_relationship.join_relationship]
+                    },
+                    query.__ash_bindings__.current
+                  )
+                else
+                  query
+                end
+
+              start_bindings_at =
+                if first_relationship && first_relationship.type == :many_to_many do
+                  query.__ash_bindings__.current + 1
+                else
+                  query.__ash_bindings__.current
+                end
+
+              case get_subquery(
+                     resource,
+                     aggregates,
+                     is_single?,
+                     first_relationship,
+                     relationship_path,
+                     tmp_query,
+                     start_bindings_at,
+                     query,
+                     source_binding,
+                     root_data_path,
+                     tenant,
+                     join_filters
+                   ) do
+                {:error, error} ->
+                  {:error, error}
+
+                {:ok, subquery} ->
+                  query =
+                    join_subquery(
+                      query,
+                      subquery,
+                      first_relationship,
+                      relationship_path,
+                      aggregates,
+                      source_binding,
+                      root_data_path
+                    )
+
+                  if select? do
+                    new_dynamics =
+                      Enum.map(
+                        aggregates,
+                        &{&1.load, &1.name,
+                         select_dynamic(
+                           resource,
+                           query,
+                           &1,
+                           query.__ash_bindings__.current - 1
+                         )}
+                      )
+
+                    {:cont, {:ok, query, new_dynamics ++ dynamics}}
+                  else
+                    {:cont, {:ok, query, dynamics}}
+                  end
+              end
+          end
+        end
+      )
+
+    case result do
+      {:ok, query, dynamics} ->
+        if select? do
+          {:ok, add_aggregate_selects(query, dynamics)}
+        else
+          {:ok, query}
         end
 
       {:error, error} ->
@@ -942,14 +895,6 @@ defmodule AshSql.Aggregate.Lateral do
     )
   end
 
-  defp different_queries?(nil, nil), do: false
-  defp different_queries?(nil, _), do: true
-  defp different_queries?(_, nil), do: true
-
-  defp different_queries?(query1, query2) do
-    query1.filter != query2.filter || query1.sort != query2.sort
-  end
-
   @doc false
   def extract_shared_filters(aggregates) do
     aggregates
@@ -1040,109 +985,6 @@ defmodule AshSql.Aggregate.Lateral do
     end
   end
 
-  defp use_aggregate_name(query, aggregate_name) do
-    {%{
-       query
-       | __ash_bindings__: %{
-           query.__ash_bindings__
-           | current_aggregate_name:
-               next_aggregate_name(query.__ash_bindings__.current_aggregate_name),
-             aggregate_names:
-               Map.put(
-                 query.__ash_bindings__.aggregate_names,
-                 aggregate_name,
-                 query.__ash_bindings__.current_aggregate_name
-               )
-         }
-     }, query.__ash_bindings__.current_aggregate_name}
-  end
-
-  defp resource_aggregates_to_aggregates(resource, query, aggregates) do
-    private_context = query.__ash_bindings__.context[:private]
-
-    Enum.reduce_while(aggregates, {:ok, []}, fn
-      %Ash.Query.Aggregate{} = aggregate, {:ok, aggregates} ->
-        aggregate =
-          Ash.Actions.Read.add_calc_context(
-            aggregate,
-            private_context[:actor],
-            private_context[:authorize?],
-            private_context[:tenant],
-            private_context[:tracer],
-            query.__ash_bindings__[:domain],
-            query.__ash_bindings__[:resource],
-            parent_stack: query.__ash_bindings__[:parent_resources] || []
-          )
-
-        {:cont, {:ok, [aggregate | aggregates]}}
-
-      aggregate, {:ok, aggregates} ->
-        resource
-        |> resource_aggregate_to_aggregate(aggregate,
-          actor: private_context[:actor],
-          tenant: private_context[:tenant]
-        )
-        |> case do
-          {:ok, aggregate} ->
-            aggregate =
-              aggregate
-              |> Map.put(:load, aggregate.name)
-              |> Ash.Actions.Read.add_calc_context(
-                private_context[:actor],
-                private_context[:authorize?],
-                private_context[:tenant],
-                private_context[:tracer],
-                query.__ash_bindings__[:domain],
-                query.__ash_bindings__[:resource],
-                parent_stack: query.__ash_bindings__[:parent_resources] || []
-              )
-
-            {:cont, {:ok, [aggregate | aggregates]}}
-
-          {:error, error} ->
-            {:halt, {:error, error}}
-        end
-    end)
-  end
-
-  @doc false
-  def resource_aggregate_to_aggregate(resource, aggregate, opts \\ []) do
-    related = Ash.Resource.Info.related(resource, aggregate.relationship_path)
-
-    read_action =
-      aggregate.read_action || Ash.Resource.Info.primary_action!(related, :read).name
-
-    with %{valid?: true} = aggregate_query <-
-           Ash.Query.for_read(related, read_action, %{},
-             actor: opts[:actor],
-             tenant: opts[:tenant]
-           ),
-         %{valid?: true} = aggregate_query <-
-           Ash.Query.build(aggregate_query, filter: aggregate.filter, sort: aggregate.sort) do
-      Ash.Query.Aggregate.new(
-        resource,
-        aggregate.name,
-        aggregate.kind,
-        path: aggregate.relationship_path,
-        query: aggregate_query,
-        field: aggregate.field,
-        default: aggregate.default,
-        filterable?: aggregate.filterable?,
-        type: aggregate.type,
-        sortable?: aggregate.filterable?,
-        include_nil?: aggregate.include_nil?,
-        constraints: aggregate.constraints,
-        implementation: aggregate.implementation,
-        uniq?: aggregate.uniq?,
-        read_action: read_action,
-        authorize?: aggregate.authorize?
-      )
-    else
-      %{errors: errors} ->
-        {:error, errors}
-    end
-  end
-
   defp add_first_join_aggregate(
          query,
          _resource,
@@ -1191,7 +1033,7 @@ defmodule AshSql.Aggregate.Lateral do
           case aggregate.field do
             %Ash.Query.Aggregate{} = aggregate ->
               {:ok, ecto_query} =
-                add_aggregates(
+                AshSql.Aggregate.add_aggregates(
                   ecto_query,
                   [aggregate],
                   aggregate.query.resource,
@@ -1204,7 +1046,7 @@ defmodule AshSql.Aggregate.Lateral do
 
             %Ash.Resource.Aggregate{} = aggregate ->
               {:ok, ecto_query} =
-                add_aggregates(
+                AshSql.Aggregate.add_aggregates(
                   ecto_query,
                   [aggregate],
                   Ash.Resource.Info.related(aggregate.resource, aggregate.relationship_path),
@@ -1503,13 +1345,27 @@ defmodule AshSql.Aggregate.Lateral do
         case field do
           %Ash.Query.Aggregate{} = aggregate ->
             {:ok, agg_query} =
-              add_aggregates(agg_query, [aggregate], related, false, source_binding, root_data)
+              AshSql.Aggregate.add_aggregates(
+                agg_query,
+                [aggregate],
+                related,
+                false,
+                source_binding,
+                root_data
+              )
 
             agg_query
 
           %Ash.Resource.Aggregate{} = aggregate ->
             {:ok, agg_query} =
-              add_aggregates(agg_query, [aggregate], related, false, source_binding, root_data)
+              AshSql.Aggregate.add_aggregates(
+                agg_query,
+                [aggregate],
+                related,
+                false,
+                source_binding,
+                root_data
+              )
 
             agg_query
 
@@ -1716,15 +1572,10 @@ defmodule AshSql.Aggregate.Lateral do
     )
   end
 
-  def next_aggregate_name(i) do
-    @next_aggregate_names[i] ||
-      raise Ash.Error.Framework.AssumptionFailed,
-        message: """
-        All 1000 static names for aggregates have been used in a single query.
-        Congratulations, this means that you have gone so wildly beyond our imagination
-        of how much can fit into a single quer. Please file an issue and we will raise the limit.
-        """
-  end
+  defdelegate next_aggregate_name(index), to: AshSql.Aggregate.Common
+
+  defdelegate resource_aggregate_to_aggregate(resource, aggregate, opts \\ []),
+    to: AshSql.Aggregate.Common
 
   defp select_all_aggregates(
          aggregates,
@@ -2608,7 +2459,7 @@ defmodule AshSql.Aggregate.Lateral do
         )
 
       {:ok, query} =
-        add_aggregates(
+        AshSql.Aggregate.add_aggregates(
           query,
           used_aggregates,
           query.__ash_bindings__.resource,

@@ -16,14 +16,24 @@ defmodule AshSql.Aggregate.Grouped do
   @relationship_row_number_field :__ash_sql_grouped_relationship_row_number__
   @unrelated_join_field :__ash_sql_grouped_unrelated_join__
 
-  def add_aggregates(query, aggregates, resource, select?, _source_binding, _root_data) do
-    add_aggregates(query, aggregates, resource, select?: select?)
+  def add_aggregates(query, aggregates, resource, select?, source_binding, root_data) do
+    path = AshSql.Aggregate.Common.attachment_path(root_data)
+
+    do_add_aggregates(query, aggregates, resource, select?, %{
+      source_binding: source_binding,
+      path: path
+    })
   end
 
   def add_aggregates(query, aggregates, resource, opts \\ []) do
-    select? = Keyword.get(opts, :select?, true)
-
-    do_add_aggregates(query, aggregates, resource, select?)
+    AshSql.Aggregate.add_aggregates(
+      query,
+      aggregates,
+      resource,
+      Keyword.get(opts, :select?, true),
+      query.__ash_bindings__.root_binding,
+      nil
+    )
   end
 
   def add_sort_aggregates(query, sort, _resource) when sort in [nil, []], do: {:ok, query}
@@ -40,9 +50,9 @@ defmodule AshSql.Aggregate.Grouped do
     filter_uses_parent?(filter)
   end
 
-  defp do_add_aggregates(query, [], _resource, _select?), do: {:ok, query}
+  defp do_add_aggregates(query, [], _resource, _select?, _context), do: {:ok, query}
 
-  defp do_add_aggregates(query, aggregates, resource, select?) do
+  defp do_add_aggregates(query, aggregates, resource, select?, context) do
     primary_key = Ash.Resource.Info.primary_key(resource)
 
     cond do
@@ -57,11 +67,14 @@ defmodule AshSql.Aggregate.Grouped do
         {already_added, remaining} =
           aggregates
           |> Enum.uniq_by(& &1.name)
-          |> Enum.split_with(&already_added?(&1, query.__ash_bindings__))
+          |> Enum.split_with(&already_added?(&1, query.__ash_bindings__, context.path))
 
         already_added_dynamics =
           if select? do
-            Enum.map(already_added, &existing_aggregate_dynamic(&1, query.__ash_bindings__))
+            Enum.map(
+              already_added,
+              &existing_aggregate_dynamic(&1, query.__ash_bindings__, context.path)
+            )
           else
             []
           end
@@ -75,7 +88,8 @@ defmodule AshSql.Aggregate.Grouped do
                  query,
                  resource,
                  aggregate_relationship_path(relationship_path),
-                 aggregates
+                 aggregates,
+                 context
                ) do
             {:ok, query, new_dynamics} ->
               {:cont, {:ok, query, new_dynamics ++ dynamics}}
@@ -152,9 +166,9 @@ defmodule AshSql.Aggregate.Grouped do
     end
   end
 
-  defp already_added?(aggregate, bindings) do
+  defp already_added?(aggregate, bindings, path) do
     Enum.any?(bindings.bindings, fn
-      {_binding, %{type: :aggregate, aggregates: aggregates}} ->
+      {_binding, %{type: :aggregate, aggregates: aggregates, path: ^path}} ->
         aggregate.name in Enum.map(aggregates, & &1.name)
 
       _binding ->
@@ -162,10 +176,10 @@ defmodule AshSql.Aggregate.Grouped do
     end)
   end
 
-  defp existing_aggregate_dynamic(aggregate, bindings) do
+  defp existing_aggregate_dynamic(aggregate, bindings, path) do
     {binding, _aggregate_binding} =
       Enum.find(bindings.bindings, fn
-        {_binding, %{type: :aggregate, aggregates: aggregates}} ->
+        {_binding, %{type: :aggregate, aggregates: aggregates, path: ^path}} ->
           aggregate.name in Enum.map(aggregates, & &1.name)
 
         _binding ->
@@ -314,18 +328,18 @@ defmodule AshSql.Aggregate.Grouped do
     end
   end
 
-  defp add_aggregate_group(query, _resource, [], aggregates) do
+  defp add_aggregate_group(query, _resource, [], aggregates, context) do
     if Enum.all?(aggregates, &(&1.related? == false)) do
-      do_add_unrelated_aggregate_group(query, aggregates)
+      do_add_unrelated_aggregate_group(query, aggregates, context)
     else
       {:error, "AshSql only supports loading unrelated aggregates with no relationship path"}
     end
   end
 
-  defp add_aggregate_group(query, resource, relationship_path, aggregates) do
+  defp add_aggregate_group(query, resource, relationship_path, aggregates, context) do
     with {:ok, relationships} <- relationships(resource, relationship_path),
          :ok <- validate_relationships(resource, relationship_path, relationships, aggregates) do
-      do_add_aggregate_group(query, relationships, aggregates)
+      do_add_aggregate_group(query, relationships, aggregates, context)
     end
   end
 
@@ -384,7 +398,7 @@ defmodule AshSql.Aggregate.Grouped do
       Enum.all?(aggregates, &(&1.kind in @scalar_aggregate_kinds))
   end
 
-  defp do_add_unrelated_aggregate_group(query, aggregates) do
+  defp do_add_unrelated_aggregate_group(query, aggregates, context) do
     binding = query.__ash_bindings__.current
 
     with :ok <- validate_aggregate_filters(aggregates),
@@ -401,7 +415,7 @@ defmodule AshSql.Aggregate.Grouped do
       query =
         AshSql.Bindings.add_binding(query, %{
           type: :aggregate,
-          path: [],
+          path: context.path,
           aggregates: aggregates
         })
 
@@ -415,28 +429,33 @@ defmodule AshSql.Aggregate.Grouped do
     end
   end
 
-  defp do_add_aggregate_group(query, [first_relationship | _] = relationships, aggregates) do
+  defp do_add_aggregate_group(
+         query,
+         [first_relationship | _] = relationships,
+         aggregates,
+         context
+       ) do
     binding = query.__ash_bindings__.current
 
     with :ok <- validate_aggregate_filters(aggregates),
          {:ok, aggregate_query} <-
            aggregate_query(query, relationships, aggregates, binding) do
       aggregate_query = Ecto.Query.subquery(aggregate_query)
-      root_binding = query.__ash_bindings__.root_binding
+      source_binding = context.source_binding
 
       query =
         from(_row in query,
           left_join: aggregate in ^aggregate_query,
           as: ^binding,
           on:
-            field(as(^root_binding), ^first_relationship.source_attribute) ==
+            field(as(^source_binding), ^first_relationship.source_attribute) ==
               field(aggregate, ^aggregate_join_attribute(first_relationship))
         )
 
       query =
         AshSql.Bindings.add_binding(query, %{
           type: :aggregate,
-          path: [],
+          path: context.path,
           aggregates: aggregates
         })
 

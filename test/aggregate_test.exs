@@ -79,4 +79,59 @@ defmodule AshSql.AggregateTest do
       assert aggregate.read_action == :read_all
     end
   end
+
+  describe "shared aggregate normalization" do
+    test "reuses a string name after a different definition was requested" do
+      {:ok, original} = build(actor: %{id: Ash.UUID.generate()})
+      original = %{original | name: "highest_score"}
+      filtered = %{original | query: Ash.Query.do_filter(original.query, score: 10)}
+
+      {:ok, query, [first]} = normalize([original])
+      {:ok, query, [second]} = normalize([filtered], query)
+      {:ok, query, [again]} = normalize([original], query)
+
+      assert is_atom(first.name)
+      refute first.name == second.name
+      assert again.name == first.name
+      assert AshSql.Aggregate.Common.name_for(original, query.__ash_bindings__, []) == first.name
+      assert AshSql.Aggregate.Common.name_for(filtered, query.__ash_bindings__, []) == second.name
+    end
+
+    test "resolves aliases independently for each attachment path" do
+      {:ok, original} = build(actor: %{id: Ash.UUID.generate()})
+      original = %{original | name: "highest_score"}
+      filtered = %{original | query: Ash.Query.do_filter(original.query, score: 10)}
+
+      {:ok, query, [first]} = normalize([original], nil, {Post, [:first]})
+      {:ok, query, [second]} = normalize([filtered], query, {Post, [:second]})
+
+      refute first.name == second.name
+
+      assert AshSql.Aggregate.Common.name_for(original, query.__ash_bindings__, [:first]) ==
+               first.name
+
+      assert AshSql.Aggregate.Common.name_for(filtered, query.__ash_bindings__, [:second]) ==
+               second.name
+    end
+
+    test "resource aggregates retain the actor and tenant during normalization" do
+      aggregate = Ash.Resource.Info.aggregate(Post, :highest_score)
+      actor = %{id: Ash.UUID.generate()}
+
+      query =
+        AshSql.Bindings.default_bindings(%Ecto.Query{}, Post, __MODULE__, %{
+          private: %{actor: actor, tenant: "acme"}
+        })
+
+      assert {:ok, _, [normalized]} = normalize([aggregate], query)
+      assert normalized.load == :highest_score
+      assert normalized.query.context.private.actor == actor
+      assert normalized.query.tenant == "acme"
+    end
+  end
+
+  defp normalize(aggregates, query \\ nil, root_data \\ nil) do
+    query = query || AshSql.Bindings.default_bindings(%Ecto.Query{}, Post, __MODULE__)
+    AshSql.Aggregate.Common.normalize(query, aggregates, Post, root_data)
+  end
 end
