@@ -10,7 +10,7 @@ defmodule AshSql.Conformance.Scenarios.Operations do
   require Ash.Sort
 
   def all do
-    loaded_kinds() ++ root_kinds() ++ semantics() ++ query_uses()
+    loaded_kinds() ++ root_kinds() ++ semantics() ++ query_uses() ++ related_uses()
   end
 
   defp loaded_kinds do
@@ -253,6 +253,79 @@ defmodule AshSql.Conformance.Scenarios.Operations do
           field: :id,
           query: [filter: [value: [is_nil: false]], sort: [value: :asc, id: :desc]]
         )
+      end)
+    ]
+  end
+
+  # Aggregates referenced through relationships, and reads that deduplicate
+  # to-many filter joins. `use.fanout_read_page` fails if duplicate joined
+  # rows fill the page.
+  defp related_uses do
+    [
+      new("use.related_filter", :usage, [1], fn ctx ->
+        ctx.parent
+        |> Ash.Query.filter(children.rating_count > 1)
+        |> Ash.Query.sort(:id)
+        |> Ash.read!(authorize?: false)
+        |> Enum.map(& &1.id)
+      end),
+      new("use.related_exists", :usage, [1], fn ctx ->
+        ctx.parent
+        |> Ash.Query.filter(exists(children, rating_count > 1))
+        |> Ash.Query.sort(:id)
+        |> Ash.read!(authorize?: false)
+        |> Enum.map(& &1.id)
+      end),
+      new("use.to_one_filter", :usage, [11, 12, 13, 14], fn ctx ->
+        ctx.child
+        |> Ash.Query.filter(parent.child_sum > 5)
+        |> Ash.Query.sort(:id)
+        |> Ash.read!(authorize?: false)
+        |> Enum.map(& &1.id)
+      end),
+      new("use.to_one_sort", :usage, [21, 11, 12, 13, 14], fn ctx ->
+        ctx.child
+        |> Ash.Query.sort([{Ash.Sort.expr_sort(parent.child_count, :integer), :asc}, id: :asc])
+        |> Ash.read!(authorize?: false)
+        |> Enum.map(& &1.id)
+      end),
+      new("use.keyset_pagination", :usage, {[1, 2], [3]}, fn ctx ->
+        query =
+          ctx.parent
+          |> Ash.Query.for_read(:keyset)
+          |> Ash.Query.sort(child_count: :desc, id: :asc)
+
+        first = Ash.read!(query, page: [limit: 2], authorize?: false)
+        keyset = List.last(first.results).__metadata__.keyset
+        next = Ash.read!(query, page: [limit: 2, after: keyset], authorize?: false)
+        {Enum.map(first.results, & &1.id), Enum.map(next.results, & &1.id)}
+      end),
+      new(
+        "use.nested_limited_load",
+        :usage,
+        %{1 => [{13, 1}, {11, 2}], 2 => [{21, 0}], 3 => []},
+        fn ctx ->
+          ctx.parent
+          |> Ash.Query.load(top_children: :rating_count)
+          |> Ash.read!(authorize?: false)
+          |> Map.new(fn row ->
+            {row.id, Enum.map(row.top_children, &{&1.id, &1.rating_count})}
+          end)
+        end
+      ),
+      new("use.fanout_count", :usage, 2, fn ctx ->
+        ctx.child
+        |> Ash.Query.filter(ratings.score > 5)
+        |> Ash.count!(authorize?: false)
+      end),
+      new("use.fanout_read_page", :usage, {[11, 12], 2}, fn ctx ->
+        page =
+          ctx.child
+          |> Ash.Query.filter(ratings.score > 5)
+          |> Ash.Query.sort(id: :asc)
+          |> Ash.read!(page: [limit: 2, count: true], authorize?: false)
+
+        {Enum.map(page.results, & &1.id), page.count}
       end)
     ]
   end

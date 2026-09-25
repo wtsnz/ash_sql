@@ -35,6 +35,10 @@ defmodule AshSql.Conformance.Resources do
           read :paged do
             pagination(offset?: true, countable: true, required?: false)
           end
+
+          read :keyset do
+            pagination(keyset?: true, required?: false)
+          end
         end
 
         relationships do

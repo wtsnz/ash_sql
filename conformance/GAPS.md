@@ -72,10 +72,10 @@ scenario adds a different value to expose weighting errors. Deduplicating
 values is not a valid substitute for deduplicating filter matches.
 
 SQLite rejects the affected aggregate shapes; Postgres currently returns the
-multiplied sum/count/list/custom/average. The Postgres direct read control
-returns distinct child records. SQLite's direct read control itself returns a
-duplicate, which is recorded as a broader read defect. Composite-key count
-coverage also exposes Postgres's filter multiplication.
+multiplied sum/count/list/custom/average. The direct read control returns
+distinct child records on Postgres; SQLite's duplicate is a separate read
+regression, recorded under [Sorted distinct reads](#sorted-distinct-reads).
+Composite-key count coverage also exposes Postgres's filter multiplication.
 
 ## Record identity
 
@@ -85,6 +85,18 @@ deduplication subquery. Loading aggregates on keyless source resources is also
 rejected by grouped; determine which operations can use relationship keys and
 which require an explicit row identity. Ordinary keyless destination counts
 already work.
+
+## Sorted distinct reads
+
+Keep sorted SQLite reads distinct when a filter joins a to-many relationship.
+This is a regression in AshSQLite #232, not an aggregate gap: upstream
+AshSQLite returns the two matching children. #232 adds `return_query/2`, so
+sorted DISTINCT queries go through `AshSql.Query.return_query/2`. That selects
+`row_number() OVER "order"` inside the DISTINCT subquery. Postgres deduplicates
+with `DISTINCT ON`, which the row number does not affect. SQLite's plain
+`DISTINCT` keeps every joined row, so a sorted page of two returns child 11
+twice and omits child 12 while the page count is two. Unsorted reads and
+`Ash.count` are unaffected.
 
 ## From many
 

@@ -28,7 +28,8 @@ defmodule AshSql.Conformance.Expectations do
     path.final_many_to_many_scalar path.many_to_many path.many_to_many_first path.many_to_many_list
     path.multi_hop path.no_attributes_control path.to_one path.unrelated
     root.avg root.count root.exists root.first root.max root.min root.sum
-    use.calculation use.filter use.pagination use.sort
+    use.calculation use.fanout_count use.filter use.keyset_pagination use.nested_limited_load
+    use.pagination use.related_exists use.related_filter use.sort use.to_one_filter use.to_one_sort
     values.constrained_scalar values.distinct_count values.distinct_list values.field_count
     values.filtered_first_default values.include_nil_first values.include_nil_list values.list_default
     values.root_empty values.same_name_distinct_definitions values.scalar_default
@@ -122,7 +123,8 @@ defmodule AshSql.Conformance.Expectations do
       "filter.fanout_custom" => fanout(6),
       "filter.fanout_count_records" =>
         postgres(defect_value(%{1 => 3, 2 => 0, 3 => 0}, "filter-fanout")),
-      "filter.fanout_read_control" => sqlite(defect_value([11, 11, 12], "filter-fanout")),
+      "filter.fanout_read_control" => sqlite(defect_value([11, 11, 12], "sorted-distinct-reads")),
+      "use.fanout_read_page" => sqlite(defect_value({[11, 11], 2}, "sorted-distinct-reads")),
       "identity.composite_count" => sqlite(composite_count()),
       "identity.composite_fanout_count" => %{
         sqlite: composite_count(),

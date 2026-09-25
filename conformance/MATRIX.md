@@ -53,7 +53,7 @@ CI runs the base and PR suites in the same environment, compares their JSON resu
 | [`filter.fanout_count_records`](lib/scenarios/filters.ex#L53) | supported | [known_defect](GAPS.md#filter-fanout) |
 | [`filter.fanout_custom`](lib/scenarios/filters.ex#L92) | [unsupported](GAPS.md#filter-fanout) | [known_defect](GAPS.md#filter-fanout) |
 | [`filter.fanout_list`](lib/scenarios/filters.ex#L92) | [unsupported](GAPS.md#filter-fanout) | [known_defect](GAPS.md#filter-fanout) |
-| [`filter.fanout_read_control`](lib/scenarios/filters.ex#L56) | [known_defect](GAPS.md#filter-fanout) | supported |
+| [`filter.fanout_read_control`](lib/scenarios/filters.ex#L56) | [known_defect](GAPS.md#sorted-distinct-reads) | supported |
 | [`filter.fanout_sum`](lib/scenarios/filters.ex#L92) | [unsupported](GAPS.md#filter-fanout) | [known_defect](GAPS.md#filter-fanout) |
 | [`filter.join`](lib/scenarios/filters.ex#L41) | supported | supported |
 | [`filter.not_exists`](lib/scenarios/filters.ex#L81) | supported | supported |
@@ -115,9 +115,17 @@ CI runs the base and PR suites in the same environment, compares their JSON resu
 | [`root.sum`](lib/scenarios/operations.ex#L52) | supported | supported |
 | [`root.unsorted_first_empty`](lib/scenarios/operations.ex#L150) | supported | [known_defect](GAPS.md#root-first) |
 | [`use.calculation`](lib/scenarios/operations.ex#L214) | supported | supported |
+| [`use.fanout_count`](lib/scenarios/operations.ex#L316) | supported | supported |
+| [`use.fanout_read_page`](lib/scenarios/operations.ex#L321) | [known_defect](GAPS.md#sorted-distinct-reads) | supported |
 | [`use.filter`](lib/scenarios/operations.ex#L202) | supported | supported |
+| [`use.keyset_pagination`](lib/scenarios/operations.ex#L292) | supported | supported |
+| [`use.nested_limited_load`](lib/scenarios/operations.ex#L303) | supported | supported |
 | [`use.pagination`](lib/scenarios/operations.ex#L220) | supported | supported |
+| [`use.related_exists`](lib/scenarios/operations.ex#L272) | supported | supported |
+| [`use.related_filter`](lib/scenarios/operations.ex#L265) | supported | supported |
 | [`use.sort`](lib/scenarios/operations.ex#L208) | supported | supported |
+| [`use.to_one_filter`](lib/scenarios/operations.ex#L279) | supported | supported |
+| [`use.to_one_sort`](lib/scenarios/operations.ex#L286) | supported | supported |
 | [`values.constrained_scalar`](lib/scenarios/operations.ex#L106) | supported | supported |
 | [`values.distinct_count`](lib/scenarios/operations.ex#L68) | supported | supported |
 | [`values.distinct_list`](lib/scenarios/operations.ex#L71) | supported | supported |
