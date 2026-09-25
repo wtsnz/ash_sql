@@ -48,9 +48,22 @@ PostgreSQL server.
 
 ## Read the results
 
-[MATRIX.md](MATRIX.md) lists the explicit expectations. The ExUnit formatter
-writes `results/sqlite-postgres.json`, or a file named for the selected adapter.
-CI uploads these reports even when a test fails.
+[MATRIX.md](MATRIX.md) lists the explicit expectations. Each scenario ID links
+to its declaration line, including declarations that generate several cases.
+The generator captures those locations from the Elixir source.
+
+Test logs print each check's status, intended result and actual result. Known
+gaps print their accepted signature as well. Only supported, matching results
+say `PASS`; recorded gaps say `GAP MATCHED`, and unresolved cases say
+`OBSERVATION MATCHED`. Failed checks retain the actual observation.
+
+GitHub's job summary shows counts and expandable result tables, with failures
+expanded. The formatter writes the same Markdown to `results/sqlite-postgres.md`
+and full JSON to `results/sqlite-postgres.json`, or files named for the selected
+adapter. CI uploads both, including on test failures. Long errors are shortened
+for display; JSON retains full error details. Stack frames are kept in `details`
+but excluded from the comparable observation, so source line changes do not
+look like changed results. Assertions still check the original complete error.
 
 | Status | A passing test means |
 | --- | --- |
@@ -65,6 +78,36 @@ known-defect case fail the test until its declaration is promoted. A different
 wrong value, unrelated exception, or database setup failure also fails.
 Unresolved cases link to a decision and make no correctness claim. There are
 no blanket skips and no automatic expected-result updates.
+
+## Compare a PR
+
+CI checks out the PR base in a separate worktree and runs its suite in the same
+job, with the same runtime and PostgreSQL service. The base uses its own locked
+dependencies and AshSQL checkout. Copied dependency/build caches reduce repeat
+compilation; the base gets its own dependency directory and test database.
+
+The comparison joins the two generated JSON reports by scenario ID and adapter.
+GitHub shows added/removed checks and changed statuses, executions, intended
+values, accepted signatures and actual observations. Full JSON remains an
+artifact. Elixir scenarios and expectations are the source of truth; there is
+no checked-in JSON snapshot to update.
+
+The first PR establishes the initial baseline when its base has no suite. A
+base test failure does not stop comparison with a passing PR; its exit code and
+recorded results are shown. Missing reports are errors, and older reports that
+lack actual observations are explicitly labelled. These comparisons describe
+aggregate scenarios, while the main test step still gates all test failures.
+
+No local work is required. To compare two saved reports locally:
+
+```sh
+mise exec -- mix conformance.compare \
+  --base results/base/sqlite-postgres.json \
+  --current results/sqlite-postgres.json
+```
+
+Changes are also written to `results/changes-sqlite-postgres.md`. CI compares
+each adapter separately and includes the base commit in the summary.
 
 ## Coverage and boundaries
 
@@ -133,7 +176,7 @@ It intentionally excludes the separately stacked from_many and schema fixes.
 The newer locked Ash version can expose behavior different from older adapter
 test runs; the matrix describes this exact dependency set.
 
-There are 122 shared scenarios and 12 runner/catalog tests. The initial run
+There are 122 shared scenarios and 27 runner/catalog/report tests. The run
 matches all 244 adapter expectations:
 
 | Adapter | Supported | Unsupported | Known defect | Unresolved |

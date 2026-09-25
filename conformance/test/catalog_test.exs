@@ -61,4 +61,21 @@ defmodule AshSql.Conformance.CatalogTest do
   test "the checked-in matrix matches the executable declarations" do
     assert File.read!("MATRIX.md") == Report.matrix(), "Run mix conformance.matrix"
   end
+
+  test "every scenario links to its declaration, including generated cases" do
+    for scenario <- Catalog.all() do
+      assert String.starts_with?(scenario.source.file, "lib/scenarios/")
+
+      line =
+        scenario.source.file
+        |> File.read!()
+        |> String.split("\n")
+        |> Enum.at(scenario.source.line - 1)
+
+      assert line =~ "new(", "#{scenario.id} source link must point to its declaration"
+
+      assert Report.matrix() =~
+               "[`#{scenario.id}`](#{scenario.source.file}#L#{scenario.source.line})"
+    end
+  end
 end

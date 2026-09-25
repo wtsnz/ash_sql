@@ -5,10 +5,24 @@
 defmodule AshSql.Conformance.Scenario do
   @moduledoc "A public Ash operation with an adapter-independent expected result."
   @enforce_keys [:id, :area, :expected, :run]
-  defstruct [:id, :area, :expected, :run]
+  defstruct [:id, :area, :expected, :run, :source]
 
-  def new(id, area, expected, run),
-    do: %__MODULE__{id: id, area: area, expected: expected, run: run}
+  defmacro new(id, area, expected, run) do
+    source = %{
+      file: Path.relative_to(__CALLER__.file, Path.expand("..", __DIR__)),
+      line: __CALLER__.line
+    }
+
+    quote do
+      %AshSql.Conformance.Scenario{
+        id: unquote(id),
+        area: unquote(area),
+        expected: unquote(expected),
+        run: unquote(run),
+        source: unquote(Macro.escape(source))
+      }
+    end
+  end
 end
 
 defmodule AshSql.Conformance.Runner do
@@ -22,8 +36,9 @@ defmodule AshSql.Conformance.Runner do
   """
   import ExUnit.Assertions
 
-  def run!(scenario, expectation, context) do
+  def run!(scenario, expectation, context, record_result \\ fn _ -> :ok end) do
     outcome = capture(fn -> scenario.run.(context) end)
+    record_result.(outcome)
     assert_outcome!(scenario, expectation, outcome)
   end
 

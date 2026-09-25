@@ -5,6 +5,7 @@
 defmodule AshSql.Conformance.RunnerTest do
   use ExUnit.Case, async: true
   alias AshSql.Conformance.{Runner, Scenario}
+  require Scenario
 
   defp scenario, do: Scenario.new("example", :runner, 7, fn _ -> 7 end)
 
@@ -80,5 +81,27 @@ defmodule AshSql.Conformance.RunnerTest do
              Runner.capture(fn -> raise ArgumentError, "bad input" end)
 
     assert catch_exit(Runner.capture(fn -> exit(:database_down) end)) == :database_down
+  end
+
+  test "observed results are recorded before a failed assertion" do
+    record = fn result -> send(self(), {:recorded, result}) end
+    failing = %{scenario() | run: fn _ -> 8 end}
+
+    assert_raise ExUnit.AssertionError, ~r/expected 7, got 8/, fn ->
+      Runner.run!(failing, :supported, %{}, record)
+    end
+
+    assert_received {:recorded, {:ok, 8}}
+  end
+
+  test "reporting failures cannot become accepted operation errors" do
+    record = fn _ -> raise ArgumentError, "report unavailable" end
+
+    expectation =
+      {:known_defect, {:error, ArgumentError, ~r/report unavailable/}, "GAPS.md#example"}
+
+    assert_raise ArgumentError, "report unavailable", fn ->
+      Runner.run!(scenario(), expectation, %{}, record)
+    end
   end
 end

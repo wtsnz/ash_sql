@@ -4,7 +4,7 @@
 
 defmodule AshSql.Conformance.AggregateTest do
   use ExUnit.Case, async: false
-  alias AshSql.Conformance.{Adapter, Catalog, Expectations, Fixtures, Runner}
+  alias AshSql.Conformance.{Adapter, Catalog, Expectations, Fixtures, Formatter, Runner}
 
   for adapter <- Adapter.selected(), scenario <- Catalog.all() do
     @tag adapter: adapter.id(), scenario: scenario.id, area: scenario.area
@@ -15,7 +15,10 @@ defmodule AshSql.Conformance.AggregateTest do
 
       try do
         context = Fixtures.seed!(adapter)
-        Runner.run!(scenario, Expectations.for(scenario.id, adapter.id()), context)
+
+        Runner.run!(scenario, Expectations.for(scenario.id, adapter.id()), context, fn outcome ->
+          Formatter.record(scenario.id, adapter.id(), outcome)
+        end)
       after
         adapter.checkin!()
       end
