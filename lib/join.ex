@@ -743,7 +743,7 @@ defmodule AshSql.Join do
   end
 
   def set_join_prefix(join_query, query, resource) do
-    %{join_query | prefix: join_prefix(join_query, query, resource)}
+    put_target_prefix(join_query, query, resource)
   end
 
   # Unrelated target queries don't inherit the source's tenant automatically.
@@ -757,34 +757,63 @@ defmodule AshSql.Join do
 
   def inherit_source_tenant(target_query, _query), do: target_query
 
-  # A target query's explicit schema or tenant takes precedence. An unset
-  # prefix would otherwise inherit the outer query's schema in Ecto.
-  def set_unrelated_subquery_prefix(%{prefix: prefix} = subquery, _query, _resource)
-      when not is_nil(prefix),
-      do: subquery
-
   def set_unrelated_subquery_prefix(subquery, query, resource) do
-    prefix =
-      query.__ash_bindings__.sql_behaviour.schema(resource) ||
-        query.__ash_bindings__.sql_behaviour.repo(resource, :mutate).config()[:default_prefix]
-
-    %{subquery | prefix: prefix}
+    put_target_prefix(subquery, query, resource)
   end
 
-  defp join_prefix(base_query, query, resource) do
+  # Records which resource the prefix was chosen for, so a later call for a
+  # different resource doesn't mistake it for the query's own.
+  defp put_target_prefix(target_query, query, resource) do
+    target_query = %{target_query | prefix: target_prefix(target_query, query, resource)}
+
+    case target_query do
+      %{__ash_bindings__: bindings} when is_map(bindings) ->
+        %{target_query | __ash_bindings__: Map.put(bindings, :prefixed_for, resource)}
+
+      _ ->
+        target_query
+    end
+  end
+
+  # The schema for a subquery that reads `resource`'s table. Ecto would
+  # otherwise give it the outer query's prefix. The target query's own
+  # compiled prefix comes first, because that's what a direct read of it
+  # uses: a schema from its context, replaced by its tenant, then anything its
+  # read action's `modify_query` sets. Then the tenant for context
+  # multitenancy (the target's own before the source's), the resource's
+  # configured schema, and the repo's default.
+  defp target_prefix(target_query, query, resource) do
+    sql_behaviour = query.__ash_bindings__.sql_behaviour
+
+    if sql_behaviour.table_prefixes?() do
+      compiled_prefix(target_query, resource) ||
+        context_tenant(target_query, query, resource) ||
+        sql_behaviour.schema(resource) ||
+        sql_behaviour.repo(resource, :mutate).config()[:default_prefix]
+    end
+  end
+
+  # Only a prefix belonging to this resource counts. A many-to-many join query
+  # can belong to the destination while the prefix is for the through resource,
+  # and an earlier call may have prefixed the query for the through resource.
+  defp compiled_prefix(
+         %{prefix: prefix, __ash_bindings__: %{resource: resource} = bindings},
+         resource
+       )
+       when not is_nil(prefix) do
+    if Map.get(bindings, :prefixed_for, resource) == resource do
+      prefix
+    end
+  end
+
+  defp compiled_prefix(_target_query, _resource), do: nil
+
+  defp context_tenant(target_query, query, resource) do
     if Ash.Resource.Info.multitenancy_strategy(resource) == :context do
-      query.__ash_bindings__.sql_behaviour.schema(resource) ||
-        Map.get(query, :__tenant__) ||
-        Map.get(base_query, :__tenant__) ||
-        base_query.prefix ||
-        query.__ash_bindings__.sql_behaviour.repo(resource, :mutate).config()[
-          :default_prefix
-        ]
-    else
-      query.__ash_bindings__.sql_behaviour.schema(resource) ||
-        query.__ash_bindings__.sql_behaviour.repo(resource, :mutate).config()[
-          :default_prefix
-        ]
+      case Map.get(target_query, :__tenant__) || Map.get(query, :__tenant__) do
+        nil -> nil
+        tenant -> to_string(tenant)
+      end
     end
   end
 

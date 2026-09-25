@@ -100,10 +100,15 @@ defmodule AshSql.Aggregate.Lateral do
           |> AshSql.Join.relationship_path_to_relationships(aggregate.relationship_path)
           |> Enum.map(& &1.name)
 
+        # Aggregates grouped together share one subquery, so they must agree
+        # on its schema, tenant and tenancy bypass.
         {expanded_path, aggregate.resource, aggregate.join_filters || %{},
-         aggregate.query.action.name}
+         aggregate.query.action.name,
+         {aggregate.query.context[:data_layer][:schema], aggregate.query.tenant,
+          AshSql.Join.context_multitenancy(aggregate.query)}}
       end)
-      |> Enum.flat_map(fn {{path, resource, join_filters, read_action}, aggregates} ->
+      |> Enum.flat_map(fn {{path, resource, join_filters, read_action, _target_schema},
+                           aggregates} ->
         {can_group, cant_group} =
           Enum.split_with(aggregates, &can_group?(resource, &1, query))
 
