@@ -580,12 +580,12 @@ defmodule AshSql.Aggregate.Lateral do
     )
   end
 
-  # Relationships that declare a `limit` (or `offset`) need the limit applied
+  # Relationships with a limit, offset or `from_many?` need their bounds applied
   # to the correlated rows *before* the aggregation's `GROUP BY`, otherwise the
   # limit caps the number of groups (always 1 in a lateral join) instead of the
   # number of rows per group.
   defp limited_relationship?(relationship) do
-    (is_integer(Map.get(relationship, :limit)) or
+    (is_integer(AshSql.Aggregate.Common.relationship_limit(relationship)) or
        (Map.get(relationship, :offset) || 0) > 0) and
       is_nil(Map.get(relationship, :manual)) and
       !Map.get(relationship, :no_attributes?) and
@@ -621,7 +621,7 @@ defmodule AshSql.Aggregate.Lateral do
       )
 
     inner =
-      case Map.get(rel, :limit) do
+      case AshSql.Aggregate.Common.relationship_limit(rel) do
         limit when is_integer(limit) -> Ecto.Query.limit(inner, ^limit)
         _ -> inner
       end

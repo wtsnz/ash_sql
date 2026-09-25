@@ -993,7 +993,7 @@ defmodule AshSql.Aggregate.Grouped do
   end
 
   defp limited_relationship?(relationship) do
-    is_integer(Map.get(relationship, :limit)) or
+    is_integer(AshSql.Aggregate.Common.relationship_limit(relationship)) or
       (Map.get(relationship, :offset) || 0) > 0
   end
 
@@ -1018,7 +1018,7 @@ defmodule AshSql.Aggregate.Grouped do
     offset = Map.get(relationship, :offset) || 0
     row_number_field = @relationship_row_number_field
 
-    case Map.get(relationship, :limit) do
+    case AshSql.Aggregate.Common.relationship_limit(relationship) do
       limit when is_integer(limit) ->
         from(row in query,
           as: ^root_binding,
