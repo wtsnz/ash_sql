@@ -104,13 +104,23 @@ defmodule AshSql.Conformance.Expectations do
       "path.no_attributes_parent" => sqlite(no_attributes()),
       "filter.parent" => sqlite(parent_filter()),
       "filter.parent_unrelated" => sqlite(parent_filter()),
-      "filter.parent_relationship" =>
+      "filter.parent_relationship" => sqlite(parent_relationship()),
+      "filter.parent_through" =>
         sqlite(
           unsupported(
-            ~r/AshSql does not support loading aggregates over relationships with parent-dependent filters/,
+            ~r/AshSql does not support loading aggregates over many_to_many relationships with parent-dependent join filters/,
             "parent-correlation"
           )
         ),
+      "filter.parent_through_control" =>
+        both(
+          defect_error(
+            ~r/\*\* \(KeyError\) key :parent_bindings not found/,
+            "parent-through-load"
+          )
+        ),
+      "use.parent_filter" => sqlite(parent_relationship()),
+      "use.parent_sort" => sqlite(parent_relationship()),
       "filter.parent_join" =>
         sqlite(
           unsupported(
@@ -245,6 +255,13 @@ defmodule AshSql.Conformance.Expectations do
     do:
       unsupported(
         ~r/AshSql does not support loading aggregates with parent-dependent aggregate filters/,
+        "parent-correlation"
+      )
+
+  defp parent_relationship,
+    do:
+      unsupported(
+        ~r/AshSql does not support loading aggregates over relationships with parent-dependent filters/,
         "parent-correlation"
       )
 

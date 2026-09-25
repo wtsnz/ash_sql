@@ -42,6 +42,17 @@ filters. Prototype correlated scalar queries or parent-inclusive grouped input.
 Keep relationship scope before bounds and aggregate predicates after them.
 The public query options must hydrate parent references against the parent;
 prehydrating a child query with no parent context is not equivalent.
+Parent-dependent through filters and inline aggregates used in parent filters
+and sorts follow the same path. Postgres returns the intended results for
+both.
+
+## Parent through load
+
+Load many-to-many relationships whose join relationship filter uses `parent`.
+Loading `same_tenant_tags` directly raises `KeyError` for `:parent_bindings`
+on both adapters, and on AshSQL main. The Postgres aggregate over the same
+relationship returns the intended sum, so the failure is in relationship
+loading rather than aggregation.
 
 ## Manual
 

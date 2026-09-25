@@ -149,6 +149,18 @@ defmodule AshSql.Conformance.Resources do
             destination_attribute_on_join_resource(:tag_id)
           end
 
+          has_many(:same_tenant_links, unquote(link),
+            destination_attribute: :parent_id,
+            filter: expr(tenant_id == parent(tenant_id))
+          )
+
+          many_to_many :same_tenant_tags, unquote(tag) do
+            through(unquote(link))
+            join_relationship(:same_tenant_links)
+            source_attribute_on_join_resource(:parent_id)
+            destination_attribute_on_join_resource(:tag_id)
+          end
+
           many_to_many :tenant_tags, unquote(tag) do
             through(unquote(tenant_link))
             join_relationship(:tenant_links)

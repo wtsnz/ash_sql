@@ -8,6 +8,7 @@ defmodule AshSql.Conformance.Scenarios.Filters do
   import AshSql.Conformance.Scenarios.Helpers
   require Ash.Query
   require Ash.Expr
+  require Ash.Sort
 
   def all do
     [
@@ -84,7 +85,7 @@ defmodule AshSql.Conformance.Scenarios.Filters do
           query: Ash.Query.filter(ctx.child, not exists(ratings, score > 5))
         )
       end)
-    ] ++ fanout() ++ fanout_predicates()
+    ] ++ fanout() ++ fanout_predicates() ++ parent_uses()
   end
 
   defp fanout do
@@ -136,6 +137,40 @@ defmodule AshSql.Conformance.Scenarios.Filters do
       end),
       new("filter.fanout_nil_count", :filters, %{1 => 1, 2 => 1, 3 => 0}, fn ctx ->
         loaded(ctx, :count, :children, query: Ash.Query.filter(ctx.child, is_nil(ratings.score)))
+      end)
+    ]
+  end
+
+  # `same_tenant_tags` joins through links whose tenant matches the parent's.
+  # `above_threshold` keeps children whose value reaches the parent's threshold.
+  defp parent_uses do
+    [
+      new("filter.parent_through", :filters, %{1 => 3, 2 => nil, 3 => nil}, fn ctx ->
+        loaded(ctx, :sum, :same_tenant_tags, field: :value)
+      end),
+      new(
+        "filter.parent_through_control",
+        :filters,
+        %{1 => [201], 2 => [], 3 => []},
+        fn ctx ->
+          relationship_ids(ctx, :same_tenant_tags)
+        end
+      ),
+      new("use.parent_filter", :usage, [1], fn ctx ->
+        ctx.parent
+        |> Ash.Query.filter(sum(above_threshold, field: :value) > 0)
+        |> Ash.Query.sort(:id)
+        |> Ash.read!(authorize?: false)
+        |> Enum.map(& &1.id)
+      end),
+      new("use.parent_sort", :usage, [2, 3, 1], fn ctx ->
+        ctx.parent
+        |> Ash.Query.sort([
+          {Ash.Sort.expr_sort(sum(above_threshold, field: :value), :integer), :asc_nils_first},
+          id: :asc
+        ])
+        |> Ash.read!(authorize?: false)
+        |> Enum.map(& &1.id)
       end)
     ]
   end
