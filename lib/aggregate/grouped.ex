@@ -1563,9 +1563,9 @@ defmodule AshSql.Aggregate.Grouped do
 
   defp count_dynamic(query, relationship, %{field: nil} = aggregate, binding) do
     if count_distinct?(aggregate) do
-      count_field = fieldless_count_field(relationship)
-
-      {:ok, query, Ecto.Query.dynamic(count(field(as(^binding), ^count_field), :distinct))}
+      with {:ok, count_field} <- fieldless_count_field(relationship, aggregate) do
+        {:ok, query, Ecto.Query.dynamic(count(field(as(^binding), ^count_field), :distinct))}
+      end
     else
       {:ok, query, Ecto.Query.dynamic(count())}
     end
@@ -1585,16 +1585,25 @@ defmodule AshSql.Aggregate.Grouped do
     end
   end
 
-  defp fieldless_count_field(relationship) do
-    relationship.destination
-    |> Ash.Resource.Info.primary_key()
-    |> List.first()
-    |> case do
-      nil -> relationship.destination_attribute
-      field -> field
+  # Distinct records are only identified by a single-column primary key. One
+  # column of a composite key, or the join attribute, would undercount.
+  defp fieldless_count_field(%{destination: destination}, aggregate) do
+    case Ash.Resource.Info.primary_key(destination) do
+      [field] ->
+        {:ok, field}
+
+      [] ->
+        {:error,
+         "AshSql grouped aggregate #{inspect(aggregate.name)} requires a single primary key to count distinct records, but #{inspect(destination)} has no primary key"}
+
+      fields ->
+        {:error,
+         "AshSql grouped aggregate #{inspect(aggregate.name)} requires a single primary key to count distinct records, but #{inspect(destination)} has composite primary key #{inspect(fields)}"}
     end
   end
 
+  # Row multiplication cannot change whether any row matched.
+  defp count_distinct?(%{kind: :exists}), do: false
   defp count_distinct?(%{uniq?: true}), do: true
 
   defp count_distinct?(%{field: nil} = aggregate) do
