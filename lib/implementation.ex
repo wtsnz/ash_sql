@@ -56,6 +56,10 @@ defmodule AshSql.Implementation do
   @callback ref_cast_type(type :: term) :: term
   @callback aggregate_strategy(Ash.Resource.t()) :: :lateral | :grouped
 
+  # Whether the database supports table prefixes (schemas). When it doesn't,
+  # subqueries that read another resource's table are given no prefix.
+  @callback table_prefixes?() :: boolean
+
   @optional_callbacks determine_types: 3
 
   defmacro __using__(_) do
@@ -78,6 +82,7 @@ defmodule AshSql.Implementation do
       def equals_any?, do: true
       def storage_type(_, _), do: nil
       def aggregate_strategy(_resource), do: :lateral
+      def table_prefixes?, do: true
 
       # The cast type to use when casting a bare column reference, as opposed
       # to a value or a computed expression. Implementations can use this to
@@ -114,6 +119,7 @@ defmodule AshSql.Implementation do
                      require_extension_for_citext: 0,
                      simple_join_first_aggregates: 1,
                      aggregate_strategy: 1,
+                     table_prefixes?: 0,
                      type_expr: 2,
                      ref_cast_type: 1,
                      storage_type: 2,
