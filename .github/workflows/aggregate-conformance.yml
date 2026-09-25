@@ -1,0 +1,125 @@
+# SPDX-FileCopyrightText: 2026 ash_sql contributors <https://github.com/ash-project/ash_sql/graphs/contributors>
+#
+# SPDX-License-Identifier: MIT
+
+name: Aggregate conformance
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  aggregates:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        adapter: [sqlite, postgres]
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    defaults:
+      run:
+        working-directory: conformance
+    env:
+      MIX_ENV: test
+      CONFORMANCE_ADAPTERS: ${{ matrix.adapter }}
+      PGHOST: localhost
+      PGUSER: postgres
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch PR comparison base
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: git fetch --no-tags --depth=1 origin "$BASE_SHA"
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: '27.3.4.3'
+          elixir-version: '1.18.4'
+      - uses: actions/cache@v4
+        with:
+          path: |
+            conformance/deps
+            conformance/_build
+          key: conformance-${{ runner.os }}-otp27-elixir1.18-${{ hashFiles('conformance/mix.lock') }}-${{ matrix.adapter }}
+          restore-keys: |
+            conformance-${{ runner.os }}-otp27-elixir1.18-${{ hashFiles('conformance/mix.lock') }}
+      - run: mix deps.get --check-locked
+      - run: mix check
+      - name: Run base aggregate suite
+        id: base
+        if: always() && github.event_name == 'pull_request'
+        continue-on-error: true
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_DIR: ${{ runner.temp }}/aggregate-conformance-base
+        run: |
+          base_suite=$(git ls-tree --full-tree --name-only "$BASE_SHA" -- conformance/mix.exs)
+          if [ -z "$base_suite" ]; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "available=true" >> "$GITHUB_OUTPUT"
+          git worktree add --detach "$BASE_DIR" "$BASE_SHA"
+          for directory in deps _build; do
+            if [ -d "$directory" ]; then
+              cp -a "$directory" "$BASE_DIR/conformance/"
+            fi
+          done
+          set +e
+          (
+            set -e
+            cd "$BASE_DIR/conformance"
+            unset GITHUB_STEP_SUMMARY
+            export CONFORMANCE_PG_DATABASE=ash_sql_aggregate_conformance_base
+            mix deps.get --check-locked
+            mix deps.compile ash_sql --force
+            mix test
+          )
+          base_exit_code=$?
+          set -e
+          echo "exit_code=$base_exit_code" >> "$GITHUB_OUTPUT"
+          mkdir -p results/base
+          if [ -d "$BASE_DIR/conformance/results" ]; then
+            cp -a "$BASE_DIR/conformance/results/." results/base/
+          fi
+          exit "$base_exit_code"
+      - name: Compare aggregate results
+        if: always() && github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_AVAILABLE: ${{ steps.base.outputs.available }}
+          BASE_EXIT_CODE: ${{ steps.base.outputs.exit_code }}
+        run: |
+          if [ "$BASE_AVAILABLE" = "false" ]; then
+            mix conformance.compare --initial --base-ref "$BASE_SHA"
+          elif [ "$BASE_AVAILABLE" = "true" ]; then
+            mix conformance.compare --base "results/base/$CONFORMANCE_ADAPTERS.json" \
+              --base-ref "$BASE_SHA" --base-exit-code "${BASE_EXIT_CODE:-1}"
+          else
+            echo "Base suite availability could not be determined; inspect the base step."
+            exit 1
+          fi
+      - run: mix dialyzer
+        if: matrix.adapter == 'postgres'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: aggregate-contracts-${{ matrix.adapter }}
+          path: conformance/results/
