@@ -5,6 +5,8 @@
 defmodule AshSql.AggregateTest do
   use ExUnit.Case, async: true
 
+  require Ecto.Query
+
   defmodule Comment do
     use Ash.Resource, domain: AshSql.AggregateTest.Domain, data_layer: Ash.DataLayer.Ets
 
@@ -128,6 +130,58 @@ defmodule AshSql.AggregateTest do
       assert normalized.query.context.private.actor == actor
       assert normalized.query.tenant == "acme"
     end
+  end
+
+  describe "lateral aggregate reselection" do
+    setup do
+      {:ok, aggregate} = Ash.Query.Aggregate.new(Post, :same_name, :count, path: [:comments])
+
+      # Normalization scopes names by attachment path, so the same name can be
+      # bound at the root and at a related path in one query.
+      query =
+        Ecto.Query.from(row in "posts", as: ^0, select: %{})
+        |> AshSql.Bindings.default_bindings(Post, __MODULE__)
+        |> AshSql.Bindings.add_binding(%{type: :aggregate, path: [], aggregates: [aggregate]})
+        |> AshSql.Bindings.add_binding(%{
+          type: :aggregate,
+          path: [:related],
+          aggregates: [aggregate]
+        })
+
+      %{aggregate: aggregate, query: query}
+    end
+
+    test "selects a root aggregate only from the root binding", context do
+      {:ok, query} =
+        AshSql.Aggregate.Lateral.add_aggregates(context.query, [context.aggregate], Post, true, 0)
+
+      assert selected_bindings(query) == [1]
+    end
+
+    test "selects a related aggregate only from its attachment path", context do
+      {:ok, query} =
+        AshSql.Aggregate.Lateral.add_aggregates(
+          context.query,
+          [context.aggregate],
+          Post,
+          true,
+          0,
+          {Post, [:related]}
+        )
+
+      assert selected_bindings(query) == [2]
+    end
+  end
+
+  defp selected_bindings(query) do
+    query.select.expr
+    |> Macro.prewalk([], fn
+      {:as, _, [binding]} = ast, bindings -> {ast, [binding | bindings]}
+      ast, bindings -> {ast, bindings}
+    end)
+    |> elem(1)
+    |> Enum.uniq()
+    |> Enum.sort()
   end
 
   defp normalize(aggregates, query \\ nil, root_data \\ nil) do

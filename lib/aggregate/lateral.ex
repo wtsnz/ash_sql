@@ -47,7 +47,7 @@ defmodule AshSql.Aggregate.Lateral do
       if Enum.any?(already_computed_aggregates) && select? do
         query.__ash_bindings__.bindings
         |> Enum.filter(fn
-          {_binding, %{type: :aggregate}} -> true
+          {_binding, %{type: :aggregate, path: ^root_data_path}} -> true
           _ -> false
         end)
         |> Enum.reduce(query, fn {agg_binding, %{aggregates: aggs}}, q ->
