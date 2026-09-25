@@ -1005,7 +1005,7 @@ defmodule AshSql.Aggregate.Lateral do
     subquery_result =
       aggregate.query
       |> AshSql.Join.inherit_source_tenant(query)
-      |> then(&AshSql.Join.handle_attribute_multitenancy(&1, &1.tenant))
+      |> then(&AshSql.Join.handle_attribute_multitenancy(&1, &1.tenant, &1.action))
       |> Ash.Query.set_context(%{
         data_layer: %{
           table: nil,
