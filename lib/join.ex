@@ -558,9 +558,20 @@ defmodule AshSql.Join do
   end
 
   @doc false
+  def context_multitenancy(query) do
+    case query.context do
+      %{private: %{multitenancy: multitenancy}} -> multitenancy
+      %{multitenancy: multitenancy} -> multitenancy
+      _ -> nil
+    end
+  end
+
+  @doc false
   def handle_attribute_multitenancy(query, tenant, read_action \\ nil) do
+    multitenancy = context_multitenancy(query) || (read_action && read_action.multitenancy)
+
     if tenant && Ash.Resource.Info.multitenancy_strategy(query.resource) == :attribute &&
-         (is_nil(read_action) || read_action.multitenancy not in [:bypass, :bypass_all]) do
+         multitenancy not in [:bypass, :bypass_all] do
       multitenancy_attribute = Ash.Resource.Info.multitenancy_attribute(query.resource)
 
       if multitenancy_attribute do
@@ -715,6 +726,31 @@ defmodule AshSql.Join do
 
   def set_join_prefix(join_query, query, resource) do
     %{join_query | prefix: join_prefix(join_query, query, resource)}
+  end
+
+  # Unrelated target queries don't inherit the source's tenant automatically.
+  # Set it before compiling so nested expressions see it in their bindings.
+  def inherit_source_tenant(%{tenant: nil} = target_query, query) do
+    case query.__ash_bindings__.context[:private][:tenant] do
+      nil -> target_query
+      tenant -> Ash.Query.set_tenant(target_query, tenant)
+    end
+  end
+
+  def inherit_source_tenant(target_query, _query), do: target_query
+
+  # A target query's explicit schema or tenant takes precedence. An unset
+  # prefix would otherwise inherit the outer query's schema in Ecto.
+  def set_unrelated_subquery_prefix(%{prefix: prefix} = subquery, _query, _resource)
+      when not is_nil(prefix),
+      do: subquery
+
+  def set_unrelated_subquery_prefix(subquery, query, resource) do
+    prefix =
+      query.__ash_bindings__.sql_behaviour.schema(resource) ||
+        query.__ash_bindings__.sql_behaviour.repo(resource, :mutate).config()[:default_prefix]
+
+    %{subquery | prefix: prefix}
   end
 
   defp join_prefix(base_query, query, resource) do
