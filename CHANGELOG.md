@@ -11,23 +11,6 @@ See [Conventional Commits](Https://conventionalcommits.org) for commit guideline
 
 <!-- changelog -->
 
-## Unreleased
-
-### Features:
-
-* add strategy-aware aggregate dispatch with lateral and grouped aggregate implementations
-
-### Improvements:
-
-* add grouped query aggregate support for root SQLite-compatible aggregate kinds
-* declare `:jason` as a direct dependency for grouped list aggregate defaults
-
-### Bug Fixes:
-
-* share relationship query preparation between aggregate strategies, preserving context, read action arguments, and attribute tenant filters
-* apply grouped aggregate filters after relationship limits while retaining read action scope before those limits
-* load grouped scalar aggregate values and defaults using their declared type and constraints
-
 ## [v0.7.6](https://github.com/ash-project/ash_sql/compare/v0.7.5...v0.7.6) (2026-09-18)
 
 
