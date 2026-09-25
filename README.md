@@ -43,3 +43,15 @@ dispatch. Both strategies preserve the source binding and attachment path, so
 aggregates referenced through joined relationships attach to the related row.
 Alias reuse is scoped to that path and follows the existing filter/sort identity
 rules. Public aggregate names, including strings, are retained in results.
+
+## Aggregate conformance tests
+
+The repository's `conformance/` Mix project runs shared public Ash aggregate
+scenarios against SQLite and PostgreSQL. It records supported behavior,
+unsupported features, known defects and unresolved semantics separately.
+Adapter dependencies belong to that project and are not part of AshSQL's
+production dependencies or Hex package.
+
+See the [conformance guide](https://github.com/ash-project/ash_sql/blob/main/conformance/README.md)
+and [expectation matrix](https://github.com/ash-project/ash_sql/blob/main/conformance/MATRIX.md)
+for setup, coverage and extension.
