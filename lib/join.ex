@@ -717,6 +717,31 @@ defmodule AshSql.Join do
     %{join_query | prefix: join_prefix(join_query, query, resource)}
   end
 
+  # Unrelated target queries don't inherit the source's tenant automatically.
+  # Set it before compiling so nested expressions see it in their bindings.
+  def inherit_source_tenant(%{tenant: nil} = target_query, query) do
+    case query.__ash_bindings__.context[:private][:tenant] do
+      nil -> target_query
+      tenant -> Ash.Query.set_tenant(target_query, tenant)
+    end
+  end
+
+  def inherit_source_tenant(target_query, _query), do: target_query
+
+  # A target query's explicit schema or tenant takes precedence. An unset
+  # prefix would otherwise inherit the outer query's schema in Ecto.
+  def set_unrelated_subquery_prefix(%{prefix: prefix} = subquery, _query, _resource)
+      when not is_nil(prefix),
+      do: subquery
+
+  def set_unrelated_subquery_prefix(subquery, query, resource) do
+    prefix =
+      query.__ash_bindings__.sql_behaviour.schema(resource) ||
+        query.__ash_bindings__.sql_behaviour.repo(resource, :mutate).config()[:default_prefix]
+
+    %{subquery | prefix: prefix}
+  end
+
   defp join_prefix(base_query, query, resource) do
     if Ash.Resource.Info.multitenancy_strategy(resource) == :context do
       query.__ash_bindings__.sql_behaviour.schema(resource) ||

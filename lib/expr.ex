@@ -5,9 +5,6 @@
 defmodule AshSql.Expr do
   @moduledoc false
 
-  require Ash.Query
-  require Ash.Expr
-
   alias Ash.Filter
   alias Ash.Query.{BooleanExpression, Exists, Not, Ref}
   alias Ash.Query.Operator.IsNil
@@ -2273,16 +2270,11 @@ defmodule AshSql.Expr do
     related? = Map.get(aggregate, :related?, true)
 
     if related? == false do
-      filter =
-        if is_nil(agg_query.filter) do
-          true
-        else
-          agg_query.filter
-        end
-
       subquery_result =
         aggregate.query
-        |> Ash.Query.set_context(query.__ash_bindings__.context)
+        |> AshSql.Join.inherit_source_tenant(query)
+        |> then(&AshSql.Join.handle_attribute_multitenancy(&1, &1.tenant))
+        |> Ash.Query.set_context(Map.delete(query.__ash_bindings__.context, :data_layer))
         |> Ash.Query.set_context(%{
           data_layer: %{
             table: nil,
@@ -2290,18 +2282,15 @@ defmodule AshSql.Expr do
             start_bindings_at: (query.__ash_bindings__.current || 0) + 1
           }
         })
-        |> then(fn ash_query ->
-          if filter != true do
-            Ash.Query.filter(ash_query, filter)
-          else
-            ash_query
-          end
-        end)
         |> Ash.Query.data_layer_query()
 
       case subquery_result do
         {:ok, ecto_query} ->
-          subquery = Ecto.Query.exclude(ecto_query, :select)
+          subquery =
+            ecto_query
+            |> Ecto.Query.exclude(:select)
+            |> AshSql.Join.set_unrelated_subquery_prefix(query, aggregate.query.resource)
+
           {Ecto.Query.dynamic(exists(subquery)), acc}
 
         {:error, error} ->
@@ -2891,6 +2880,8 @@ defmodule AshSql.Expr do
         %{errors: errors} ->
           {:error, errors}
       end
+
+    subquery = AshSql.Join.set_unrelated_subquery_prefix(subquery, query, resource)
 
     # Create the exists dynamic expression
     {Ecto.Query.dynamic(exists(subquery)), acc}
