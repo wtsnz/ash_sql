@@ -20,6 +20,7 @@ defmodule AshSql.Conformance.Expectations do
     context.prepared_context_control context.read_action context.shared context.through_arguments
     context.through_tenant
     field.aggregate field.calculation field.root_aggregate
+    filter.aggregate_dependency_to_one
     filter.exists filter.fanout_nil_count filter.fanout_not_count filter.join filter.not_exists
     filter.or_exists filter.ordinary filter.sibling_independence
     identity.keyless_count
@@ -128,13 +129,9 @@ defmodule AshSql.Conformance.Expectations do
             "parent-correlation"
           )
         ),
-      "filter.aggregate_dependency" =>
-        sqlite(
-          unsupported(
-            ~r/AshSql does not support loading aggregates with aggregate filters that reference other aggregates/,
-            "filter-dependencies"
-          )
-        ),
+      "filter.aggregate_dependency" => sqlite(filter_dependency()),
+      "filter.aggregate_dependency_many_to_many" => sqlite(filter_dependency()),
+      "filter.aggregate_dependency_filtered" => sqlite(filter_dependency()),
       "filter.fanout_sum" => fanout(6),
       "filter.fanout_avg" => fanout(3.25),
       "filter.fanout_count" => fanout(3),
@@ -256,6 +253,13 @@ defmodule AshSql.Conformance.Expectations do
       unsupported(
         ~r/AshSql does not support loading aggregates with parent-dependent aggregate filters/,
         "parent-correlation"
+      )
+
+  defp filter_dependency,
+    do:
+      unsupported(
+        ~r/AshSql does not support loading aggregates with aggregate filters that reference other aggregates/,
+        "filter-dependencies"
       )
 
   defp parent_relationship,

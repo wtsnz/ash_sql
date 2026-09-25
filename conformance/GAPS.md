@@ -71,8 +71,10 @@ The direct relationship-load control returns all five children for each parent.
 ## Filter dependencies
 
 Attach aggregate dependencies to the endpoint input before compiling its filter.
-The initial scenario counts children with more than one rating. Add alias,
-nested dependency, sibling and cycle cases as the implementation expands.
+The scenarios count children with more than one rating or with any tag, and
+sum children with two ratings above five. A dependency on the parent's
+aggregate, through a to-one relationship, already works on SQLite. Add alias
+and cycle cases as the implementation expands.
 
 ## Filter fanout
 

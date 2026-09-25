@@ -24,6 +24,33 @@ defmodule AshSql.Conformance.Scenarios.Filters do
       new("filter.aggregate_dependency", :filters, %{1 => 1, 2 => 0, 3 => 0}, fn ctx ->
         loaded(ctx, :count, :children, query: Ash.Query.filter(ctx.child, rating_count > 1))
       end),
+      new("filter.aggregate_dependency_to_one", :filters, %{1 => 4, 2 => 0, 3 => 0}, fn ctx ->
+        loaded(ctx, :count, :children, query: Ash.Query.filter(ctx.child, parent.child_count > 1))
+      end),
+      new(
+        "filter.aggregate_dependency_many_to_many",
+        :filters,
+        %{1 => 2, 2 => 0, 3 => 0},
+        fn ctx ->
+          loaded(ctx, :count, :children, query: Ash.Query.filter(ctx.child, count(tags) > 0))
+        end
+      ),
+      # Only child 11 has two ratings above five.
+      new(
+        "filter.aggregate_dependency_filtered",
+        :filters,
+        %{1 => 2, 2 => nil, 3 => nil},
+        fn ctx ->
+          loaded(ctx, :sum, :children,
+            field: :value,
+            query:
+              Ash.Query.filter(
+                ctx.child,
+                count(ratings, query: [filter: Ash.Expr.expr(score > 5)]) > 1
+              )
+          )
+        end
+      ),
       new("filter.parent", :filters, %{1 => 7, 2 => nil, 3 => nil}, fn ctx ->
         loaded(ctx, :sum, :children,
           field: :value,
