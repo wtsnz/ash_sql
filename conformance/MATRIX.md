@@ -50,11 +50,15 @@ CI runs the base and PR suites in the same environment, compares their JSON resu
 | [`field.root_aggregate`](lib/scenarios/operations.ex#L252) | supported | supported |
 | [`filter.aggregate_dependency`](lib/scenarios/filters.ex#L23) | [unsupported](GAPS.md#filter-dependencies) | supported |
 | [`filter.exists`](lib/scenarios/filters.ex#L17) | supported | supported |
+| [`filter.fanout_and`](lib/scenarios/filters.ex#L120) | [unsupported](GAPS.md#filter-fanout) | [known_defect](GAPS.md#filter-fanout) |
 | [`filter.fanout_avg`](lib/scenarios/filters.ex#L92) | [unsupported](GAPS.md#filter-fanout) | [known_defect](GAPS.md#filter-fanout) |
 | [`filter.fanout_count`](lib/scenarios/filters.ex#L92) | [unsupported](GAPS.md#filter-fanout) | [known_defect](GAPS.md#filter-fanout) |
 | [`filter.fanout_count_records`](lib/scenarios/filters.ex#L53) | supported | [known_defect](GAPS.md#filter-fanout) |
 | [`filter.fanout_custom`](lib/scenarios/filters.ex#L92) | [unsupported](GAPS.md#filter-fanout) | [known_defect](GAPS.md#filter-fanout) |
 | [`filter.fanout_list`](lib/scenarios/filters.ex#L92) | [unsupported](GAPS.md#filter-fanout) | [known_defect](GAPS.md#filter-fanout) |
+| [`filter.fanout_nil_count`](lib/scenarios/filters.ex#L137) | supported | supported |
+| [`filter.fanout_not_count`](lib/scenarios/filters.ex#L132) | supported | supported |
+| [`filter.fanout_or`](lib/scenarios/filters.ex#L126) | [unsupported](GAPS.md#filter-fanout) | [known_defect](GAPS.md#filter-fanout) |
 | [`filter.fanout_read_control`](lib/scenarios/filters.ex#L56) | [known_defect](GAPS.md#sorted-distinct-reads) | supported |
 | [`filter.fanout_sum`](lib/scenarios/filters.ex#L92) | [unsupported](GAPS.md#filter-fanout) | [known_defect](GAPS.md#filter-fanout) |
 | [`filter.join`](lib/scenarios/filters.ex#L41) | supported | supported |

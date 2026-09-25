@@ -71,6 +71,13 @@ matching ratings must sum to 4, not 6, and count as two records. The average
 scenario adds a different value to expose weighting errors. Deduplicating
 values is not a valid substitute for deduplicating filter matches.
 
+A per-predicate EXISTS rewrite must keep the combined meaning of the filter.
+AND and OR cases also multiply on Postgres. Their intended records, and those
+of the NOT and nil-check counts, come from direct reads with the same filter.
+A negated to-many reference matches a child with a rating that fails the
+predicate, not a child without a matching rating. Fieldless counts already
+return these records on both adapters.
+
 SQLite rejects the affected aggregate shapes; Postgres currently returns the
 multiplied sum/count/list/custom/average. The direct read control returns
 distinct child records on Postgres; SQLite's duplicate is a separate read

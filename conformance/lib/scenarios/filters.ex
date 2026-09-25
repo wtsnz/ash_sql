@@ -84,7 +84,7 @@ defmodule AshSql.Conformance.Scenarios.Filters do
           query: Ash.Query.filter(ctx.child, not exists(ratings, score > 5))
         )
       end)
-    ] ++ fanout()
+    ] ++ fanout() ++ fanout_predicates()
   end
 
   defp fanout do
@@ -110,5 +110,33 @@ defmodule AshSql.Conformance.Scenarios.Filters do
         |> Map.fetch!(1)
       end)
     end
+  end
+
+  # Expected records match a direct read with the same filter: 11 and 12 for
+  # AND, 11 to 13 for OR, 13 for NOT and 14 and 21 for the nil check. A negated
+  # to-many reference matches a child with a rating that fails the predicate.
+  defp fanout_predicates do
+    [
+      new("filter.fanout_and", :filters, %{1 => 4, 2 => nil, 3 => nil}, fn ctx ->
+        loaded(ctx, :sum, :children,
+          field: :value,
+          query: Ash.Query.filter(ctx.child, ratings.score > 5 and value == 2)
+        )
+      end),
+      new("filter.fanout_or", :filters, %{1 => 11, 2 => nil, 3 => nil}, fn ctx ->
+        loaded(ctx, :sum, :children,
+          field: :value,
+          query: Ash.Query.filter(ctx.child, ratings.score > 5 or value == 7)
+        )
+      end),
+      new("filter.fanout_not_count", :filters, %{1 => 1, 2 => 0, 3 => 0}, fn ctx ->
+        loaded(ctx, :count, :children,
+          query: Ash.Query.filter(ctx.child, not (ratings.score > 5))
+        )
+      end),
+      new("filter.fanout_nil_count", :filters, %{1 => 1, 2 => 1, 3 => 0}, fn ctx ->
+        loaded(ctx, :count, :children, query: Ash.Query.filter(ctx.child, is_nil(ratings.score)))
+      end)
+    ]
   end
 end

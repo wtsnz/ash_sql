@@ -20,7 +20,8 @@ defmodule AshSql.Conformance.Expectations do
     context.prepared_context_control context.read_action context.shared context.through_arguments
     context.through_tenant
     field.aggregate field.calculation field.root_aggregate
-    filter.exists filter.join filter.not_exists filter.or_exists filter.ordinary filter.sibling_independence
+    filter.exists filter.fanout_nil_count filter.fanout_not_count filter.join filter.not_exists
+    filter.or_exists filter.ordinary filter.sibling_independence
     identity.keyless_count
     loaded.avg loaded.count loaded.custom loaded.exists loaded.first loaded.list loaded.max loaded.min loaded.sum
     ordering.asc_nils_first ordering.asc_nils_last ordering.desc_nils_first ordering.desc_nils_last
@@ -129,6 +130,8 @@ defmodule AshSql.Conformance.Expectations do
       "filter.fanout_count" => fanout(3),
       "filter.fanout_list" => fanout([2, 2, 2]),
       "filter.fanout_custom" => fanout(6),
+      "filter.fanout_and" => fanout(%{1 => 6, 2 => nil, 3 => nil}),
+      "filter.fanout_or" => fanout(%{1 => 13, 2 => nil, 3 => nil}),
       "filter.fanout_count_records" =>
         postgres(defect_value(%{1 => 3, 2 => 0, 3 => 0}, "filter-fanout")),
       "filter.fanout_read_control" => sqlite(defect_value([11, 11, 12], "sorted-distinct-reads")),
