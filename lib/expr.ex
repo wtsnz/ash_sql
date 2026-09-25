@@ -2273,7 +2273,7 @@ defmodule AshSql.Expr do
       subquery_result =
         aggregate.query
         |> AshSql.Join.inherit_source_tenant(query)
-        |> then(&AshSql.Join.handle_attribute_multitenancy(&1, &1.tenant))
+        |> then(&AshSql.Join.handle_attribute_multitenancy(&1, &1.tenant, &1.action))
         |> Ash.Query.set_context(Map.delete(query.__ash_bindings__.context, :data_layer))
         |> Ash.Query.set_context(%{
           data_layer: %{

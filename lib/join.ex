@@ -558,9 +558,20 @@ defmodule AshSql.Join do
   end
 
   @doc false
+  def context_multitenancy(query) do
+    case query.context do
+      %{private: %{multitenancy: multitenancy}} -> multitenancy
+      %{multitenancy: multitenancy} -> multitenancy
+      _ -> nil
+    end
+  end
+
+  @doc false
   def handle_attribute_multitenancy(query, tenant, read_action \\ nil) do
+    multitenancy = context_multitenancy(query) || (read_action && read_action.multitenancy)
+
     if tenant && Ash.Resource.Info.multitenancy_strategy(query.resource) == :attribute &&
-         (is_nil(read_action) || read_action.multitenancy not in [:bypass, :bypass_all]) do
+         multitenancy not in [:bypass, :bypass_all] do
       multitenancy_attribute = Ash.Resource.Info.multitenancy_attribute(query.resource)
 
       if multitenancy_attribute do
