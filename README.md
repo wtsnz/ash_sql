@@ -31,9 +31,12 @@ layers can override `aggregate_strategy/1` with `:grouped` when they need the
 SQLite-style grouped aggregate implementation.
 
 The grouped strategy uses adapter-provided list aggregation. Implementations
-that select `:grouped` must implement `grouped_list_aggregate/2` and return the
-windowed list expression for their SQL dialect. AshSQLite uses SQLite's JSON
-list representation for this callback.
+that select `:grouped` must implement `grouped_list_aggregate/2` and return a
+list expression over the `:ash_sql_grouped_aggregate_window` window. The
+grouped strategy assumes SQLite-compatible SQL: list defaults are JSON-encoded,
+so list values must use a JSON list representation, and offset-only query
+aggregates use `LIMIT -1`. AshSQLite uses SQLite's JSON list representation
+for this callback.
 
 The aggregate facade normalizes resource aggregates and SQL aliases before
 dispatch. Both strategies preserve the source binding and attachment path, so
