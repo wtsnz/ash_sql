@@ -83,7 +83,9 @@ controls distinguish aggregate defects from broader read behavior. Explicit
 null ordering avoids treating database defaults as an Ash parity contract.
 Numerical helpers round floating-point and decimal aggregate values to six
 decimal places for comparisons. Constrained custom scalar values retain their
-struct and constraints; string whitespace and nils remain unchanged.
+struct and constraints; string whitespace and nils remain unchanged. String
+preservation uses numeric record ordering so database text collations do not
+change its expected result.
 
 This is a representative scenario catalog with deliberate interaction cases,
 not every possible combination. Schema-based Postgres tenancy, arbitrary

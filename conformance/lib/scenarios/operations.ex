@@ -119,13 +119,14 @@ defmodule AshSql.Conformance.Scenarios.Operations do
       new(
         "values.string_constraints",
         :results,
-        %{1 => ["", " padded ", "high", "same", "same"], 2 => ["other"], 3 => []},
+        %{1 => ["same", "same", "high", "", " padded "], 2 => ["other"], 3 => []},
         fn ctx ->
           for {id, label} <- [{15, ""}, {16, " padded "}] do
             Ash.Seed.seed!(struct(ctx.child, id: id, parent_id: 1, label: label))
           end
 
-          loaded(ctx, :list, :children, field: :label, query: [sort: [label: :asc]])
+          # Check string preservation independently of the database's text collation.
+          loaded(ctx, :list, :children, field: :label, query: [sort: [id: :asc]])
         end
       ),
       new(
