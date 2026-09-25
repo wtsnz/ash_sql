@@ -176,13 +176,13 @@ It intentionally excludes the separately stacked from_many and schema fixes.
 The newer locked Ash version can expose behavior different from older adapter
 test runs; the matrix describes this exact dependency set.
 
-There are 130 shared scenarios and 27 runner/catalog/report tests. The run
-matches all 260 adapter expectations:
+There are 135 shared scenarios and 27 runner/catalog/report tests. The run
+matches all 270 adapter expectations:
 
 | Adapter | Supported | Unsupported | Known defect | Unresolved |
 | --- | ---: | ---: | ---: | ---: |
-| SQLite | 94 | 24 | 8 | 4 |
-| PostgreSQL | 104 | 0 | 22 | 4 |
+| SQLite | 94 | 29 | 8 | 4 |
+| PostgreSQL | 108 | 0 | 23 | 4 |
 
 These counts describe scenario outcomes, not distinct bugs or a percentage of
 all Ash features. Several scenarios exercise the same underlying gap.

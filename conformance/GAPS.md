@@ -11,9 +11,9 @@ An observed Postgres result never replaces that result automatically.
 ## Root kinds
 
 Add root SQLite custom and list aggregates. Reuse bounded root inputs,
-custom expressions, windowed JSON lists, result types and defaults. Promote
-`root.custom` and `root.list` independently, adding bounded and empty inputs
-before claiming complete support.
+custom expressions, windowed JSON lists, result types and defaults. An empty
+input produces no window row, so apply list defaults outside the window. Promote
+each kind with its empty, default and bounded scenarios.
 
 ## Root relationship
 
@@ -121,6 +121,9 @@ on an unspecified ordering. SQLite currently raises a syntax error.
 
 Preserve root ordering when materializing a limited aggregate input. The
 Postgres comparator discards the ordering and aggregates value 2 instead of 7.
+A list's own sort also replaces the root ordering: the two highest IDs have
+values 4 and nil, but Postgres lists `[2, 2]`. The unsorted custom aggregate
+over the same input is correct.
 An offset-only root count also raises instead of returning three. Keep root
 ordering distinct from a first/list aggregate's own ordering.
 

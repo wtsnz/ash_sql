@@ -54,6 +54,19 @@ defmodule AshSql.Conformance.Scenarios.Bounds do
         query = ctx.child |> Ash.Query.sort(value: :desc_nils_last) |> Ash.Query.limit(1)
         root(%{ctx | child: query}, :first, field: :value, query: [sort: [value: :asc]])
       end),
+      # The two highest IDs are 21 (value 4) and 14 (value nil).
+      new("bounds.root_list_limit", :bounds, [4], fn ctx ->
+        query = ctx.child |> Ash.Query.sort(id: :desc) |> Ash.Query.limit(2)
+        root(%{ctx | child: query}, :list, field: :value, query: [sort: [value: :asc]])
+      end),
+      new("bounds.root_custom_limit", :bounds, 4, fn ctx ->
+        query = ctx.child |> Ash.Query.sort(id: :desc) |> Ash.Query.limit(2)
+
+        root(%{ctx | child: query}, :custom,
+          type: :integer,
+          implementation: {ctx.adapter.custom_aggregate(), field: :value}
+        )
+      end),
       new("bounds.root_zero", :bounds, %{count: 0, first: nil, exists: false}, fn ctx ->
         ctx.child
         |> Ash.Query.limit(0)

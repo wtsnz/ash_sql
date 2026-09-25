@@ -147,6 +147,22 @@ defmodule AshSql.Conformance.Scenarios.Operations do
           )
         end
       ),
+      new("root.list_empty", :operations, [], fn ctx ->
+        root(empty_input(ctx), :list, field: :value, query: [sort: [value: :asc]])
+      end),
+      new("root.list_default_empty", :operations, [99], fn ctx ->
+        root(empty_input(ctx), :list,
+          field: :value,
+          default: [99],
+          query: [sort: [value: :asc]]
+        )
+      end),
+      new("root.custom_empty", :operations, nil, fn ctx ->
+        root(empty_input(ctx), :custom,
+          type: :integer,
+          implementation: {ctx.adapter.custom_aggregate(), field: :value}
+        )
+      end),
       new("root.unsorted_first_empty", :operations, nil, fn ctx ->
         root(%{ctx | child: Ash.Query.filter(ctx.child, id < 0)}, :first, field: :value)
       end),
@@ -329,6 +345,8 @@ defmodule AshSql.Conformance.Scenarios.Operations do
       end)
     ]
   end
+
+  defp empty_input(ctx), do: %{ctx | child: Ash.Query.filter(ctx.child, id < 0)}
 
   defp quantity(value), do: %AshSql.Conformance.Quantity{value: value, unit: :points}
 end

@@ -46,6 +46,14 @@ defmodule AshSql.Conformance.Expectations do
     %{
       "root.custom" => sqlite(root_unsupported()),
       "root.list" => sqlite(root_unsupported()),
+      "root.list_empty" => sqlite(root_unsupported()),
+      "root.list_default_empty" => sqlite(root_unsupported()),
+      "root.custom_empty" => sqlite(root_unsupported()),
+      "bounds.root_custom_limit" => sqlite(root_unsupported()),
+      "bounds.root_list_limit" => %{
+        sqlite: root_unsupported(),
+        postgres: defect_value([2, 2], "root-bounds")
+      },
       "root.unsorted_first_empty" =>
         postgres(
           defect_error(
