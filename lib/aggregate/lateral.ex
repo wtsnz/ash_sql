@@ -1004,6 +1004,8 @@ defmodule AshSql.Aggregate.Lateral do
 
     subquery_result =
       aggregate.query
+      |> AshSql.Join.inherit_source_tenant(query)
+      |> then(&AshSql.Join.handle_attribute_multitenancy(&1, &1.tenant))
       |> Ash.Query.set_context(%{
         data_layer: %{
           table: nil,
@@ -1021,6 +1023,9 @@ defmodule AshSql.Aggregate.Lateral do
 
     case subquery_result do
       {:ok, ecto_query} ->
+        ecto_query =
+          AshSql.Join.set_unrelated_subquery_prefix(ecto_query, query, aggregate.query.resource)
+
         ref =
           %Ash.Query.Ref{
             attribute: aggregate.field,
