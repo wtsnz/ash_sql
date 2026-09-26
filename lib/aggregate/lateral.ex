@@ -423,7 +423,7 @@ defmodule AshSql.Aggregate.Lateral do
         if is_single? and has_filter?(Enum.at(aggregates, 0).query) do
           AshSql.Filter.filter(
             query,
-            Enum.at(aggregates, 0).query.filter,
+            count_each_record_once(Enum.at(aggregates, 0).query.filter, aggregate_resource),
             aggregate_resource
           )
         else
@@ -1462,7 +1462,12 @@ defmodule AshSql.Aggregate.Lateral do
         end
 
       if has_filter?(aggregate.query) && is_single? do
-        {:cont, AshSql.Filter.filter(agg_query, filter, agg_query.__ash_bindings__.resource)}
+        resource = agg_query.__ash_bindings__.resource
+
+        filter =
+          if relationship_path == [], do: count_each_record_once(filter, resource), else: filter
+
+        {:cont, AshSql.Filter.filter(agg_query, filter, resource)}
       else
         {:cont, {:ok, agg_query}}
       end
@@ -1693,6 +1698,56 @@ defmodule AshSql.Aggregate.Lateral do
         true
       )
     )
+  end
+
+  # A filter that references a to-many relationship joins its related rows, so each
+  # aggregated record would be counted once per matching related row: two children with
+  # three matching ratings would sum to 6 instead of 4. Evaluating the filter inside
+  # `exists` over the aggregated resource, correlated by primary key, counts each record
+  # once and keeps the filter's meaning: conditions on one relationship still have to hold
+  # for the same related row. A filter that uses `parent/1` is left as it is, as its
+  # references would need to move one level out.
+  @doc false
+  def count_each_record_once(nil, _resource), do: nil
+
+  def count_each_record_once(%Ash.Filter{expression: expression} = filter, resource) do
+    if fans_out?(filter, resource) and not has_parent_expr?(filter) do
+      %{filter | expression: correlated_exists(expression, resource)}
+    else
+      filter
+    end
+  end
+
+  defp fans_out?(filter, resource) do
+    filter
+    |> Ash.Filter.relationship_paths()
+    |> Enum.any?(&to_many_path?(resource, &1))
+  end
+
+  defp correlated_exists(expression, resource) do
+    same_record =
+      resource
+      |> Ash.Resource.Info.primary_key()
+      |> Enum.map(fn key ->
+        ref = %Ash.Query.Ref{
+          attribute: Ash.Resource.Info.attribute(resource, key),
+          relationship_path: [],
+          resource: resource
+        }
+
+        {:ok, equal} =
+          Ash.Query.Operator.new(Ash.Query.Operator.Eq, ref, %Ash.Query.Parent{expr: ref})
+
+        equal
+      end)
+      |> Enum.reduce(&Ash.Query.BooleanExpression.optimized_new(:and, &2, &1))
+
+    %Ash.Query.Exists{
+      related?: false,
+      path: [],
+      resource: resource,
+      expr: Ash.Query.BooleanExpression.optimized_new(:and, same_record, expression)
+    }
   end
 
   # We can potentially optimize this. We don't have to prevent aggregates that reference
