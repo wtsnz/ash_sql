@@ -2247,16 +2247,34 @@ defmodule AshSql.Aggregate.Lateral do
 
         {expr, include_nil_filter_field, query}
       else
-        if Map.get(aggregate, :uniq?) do
-          {Ecto.Query.dynamic(
-             [row],
-             fragment("array_agg(DISTINCT ?)", ^field)
-           ), nil, query}
-        else
-          {Ecto.Query.dynamic(
-             [row],
-             fragment("array_agg(?)", ^field)
-           ), nil, query}
+        # The same nil handling as the sorted branch: `include_nil?` is false by default,
+        # so nils are left out, either folded into the aggregate's own filter or by a
+        # FILTER clause.
+        array_agg =
+          if Map.get(aggregate, :uniq?) do
+            Ecto.Query.dynamic([row], fragment("array_agg(DISTINCT ?)", ^field))
+          else
+            Ecto.Query.dynamic([row], fragment("array_agg(?)", ^field))
+          end
+
+        cond do
+          aggregate.include_nil? ->
+            {array_agg, nil, query}
+
+          has_filter?(aggregate.query) and !is_single? ->
+            {array_agg, field, query}
+
+          Map.get(aggregate, :uniq?) ->
+            {Ecto.Query.dynamic(
+               [row],
+               fragment("array_agg(DISTINCT ?) FILTER (WHERE ? IS NOT NULL)", ^field, ^field)
+             ), nil, query}
+
+          true ->
+            {Ecto.Query.dynamic(
+               [row],
+               fragment("array_agg(?) FILTER (WHERE ? IS NOT NULL)", ^field, ^field)
+             ), nil, query}
         end
       end
 
