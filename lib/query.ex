@@ -276,6 +276,14 @@ defmodule AshSql.Query do
     Ash.Query.do_filter(query, expr)
   end
 
+  # `DISTINCT ON` makes the query's `ORDER BY` start with the distinct expressions, so the
+  # intended order is kept as a row number and restored outside a subquery. A plain `DISTINCT`
+  # (used where a data layer has no `DISTINCT ON`, such as SQLite) has no such constraint, and
+  # a row number selected inside it would make every joined row distinct: it just orders by
+  # the sort instead.
+  defp distinct_on?(%{distinct: %{expr: expr}}) when is_list(expr) and expr != [], do: true
+  defp distinct_on?(_query), do: false
+
   def return_query(%{__ash_bindings__: %{lateral_join?: true}} = query, resource) do
     query =
       AshSql.Bindings.default_bindings(query, resource, query.__ash_bindings__.sql_behaviour)
@@ -328,7 +336,7 @@ defmodule AshSql.Query do
       {:ok, query} ->
         query =
           if query.__ash_bindings__[:__order__?] && query.windows[:order] do
-            if query.distinct do
+            if distinct_on?(query) do
               {calculations_require_rewrite, aggregates_require_rewrite, query} =
                 rewrite_nested_selects(query)
 
