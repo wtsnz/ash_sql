@@ -133,7 +133,9 @@ defmodule AshSql.Query do
               used_aggregates =
                 Ash.Filter.used_aggregates(parent_expr, [])
 
-              with {:ok, query} <- Ash.Query.data_layer_query(query) do
+              # Looks the source records up again by key: they were already read, in whatever
+              # tenants their query allowed, so Ash mustn't scope them to the tenant again.
+              with {:ok, query} <- Ash.Query.data_layer_query(query, tenant_scoped?: true) do
                 AshSql.Aggregate.add_aggregates(
                   query,
                   used_aggregates,
