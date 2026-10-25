@@ -2309,10 +2309,16 @@ defmodule AshSql.Expr do
           agg_query.filter
         end
 
+      # Ash keys join filters by the path with `through` relationships replaced by their paths.
+      path =
+        aggregate.resource
+        |> AshSql.Join.relationship_path_to_relationships(agg_relationship_path)
+        |> Enum.map(& &1.name)
+
       related_exists_expr(
         AshSql.Join.aggregate_multitenancy_query(query, agg_query),
         %Ash.Query.Exists{
-          path: agg_relationship_path,
+          path: path,
           expr: filter,
           at_path: ref_relationship_path
         },
@@ -3222,23 +3228,25 @@ defmodule AshSql.Expr do
       join_filters
       |> Map.fetch([first_relationship.name])
       |> case do
+        # The subquery reads the first relationship's destination, which its join filter is
+        # relative to.
         {:ok, join_filter} ->
-          Ash.Query.BooleanExpression.optimized_new(
-            :and,
-            filter,
-            Ash.Filter.move_to_relationship_path(
-              join_filter,
-              rest ++ [first_relationship.name]
-            )
-          )
+          Ash.Query.BooleanExpression.optimized_new(:and, filter, join_filter)
 
         :error ->
           filter
       end
 
+    # A `many_to_many`'s join resource is filtered under the path of its join relationship.
+    through_filter =
+      if first_relationship.type == :many_to_many do
+        join_filters[[first_relationship.join_relationship]]
+      end
+
     filter =
       join_filters
       |> Map.delete([first_relationship.name])
+      |> Enum.filter(fn {path, _} -> List.starts_with?(path, [first_relationship.name]) end)
       |> Enum.reduce(filter, fn {path, path_filter}, filter ->
         path = Enum.drop(path, 1)
         parent_path = :lists.droplast(path)
@@ -3367,7 +3375,9 @@ defmodule AshSql.Expr do
                 Ash.Resource.Info.relationship(resource, first_relationship.join_relationship)
 
               {:ok, through} =
-                AshSql.Join.related_subquery(through_relationship, query)
+                AshSql.Join.related_subquery(through_relationship, query,
+                  apply_filter: through_filter
+                )
 
               Ecto.Query.from(destination in subquery,
                 join: through in ^through,

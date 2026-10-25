@@ -438,7 +438,13 @@ defmodule AshSql.Aggregate.Grouped do
            ]) do
       through_binding = query.__ash_bindings__.current
 
-      with {:ok, through_query} <- through_query(parent_query, relationship, through_binding) do
+      with {:ok, through_query} <-
+             through_query(
+               parent_query,
+               relationship,
+               through_binding,
+               join_filter(aggregate, [relationship.join_relationship])
+             ) do
         root_binding = query.__ash_bindings__.root_binding
         through_query = Ecto.Query.subquery(through_query)
 
@@ -526,7 +532,13 @@ defmodule AshSql.Aggregate.Grouped do
            related_query(parent_query, relationship, hd(aggregates), binding, [relationship.name]) do
       through_binding = query.__ash_bindings__.current
 
-      with {:ok, through_query} <- through_query(parent_query, relationship, through_binding) do
+      with {:ok, through_query} <-
+             through_query(
+               parent_query,
+               relationship,
+               through_binding,
+               join_filter(hd(aggregates), [relationship.join_relationship])
+             ) do
         root_binding = query.__ash_bindings__.root_binding
         ash_bindings = query.__ash_bindings__
         through_query = Ecto.Query.subquery(through_query)
@@ -578,7 +590,15 @@ defmodule AshSql.Aggregate.Grouped do
       through_binding = query.__ash_bindings__.current
 
       with {:ok, through_query} <-
-             through_query(parent_query, final_relationship, through_binding) do
+             through_query(
+               parent_query,
+               final_relationship,
+               through_binding,
+               join_filter(
+                 hd(aggregates),
+                 :lists.droplast(relationship_path) ++ [final_relationship.join_relationship]
+               )
+             ) do
         root_binding = query.__ash_bindings__.root_binding
         through_query = Ecto.Query.subquery(through_query)
 
@@ -895,14 +915,18 @@ defmodule AshSql.Aggregate.Grouped do
     end
   end
 
-  defp through_query(parent_query, relationship, binding) do
+  # Ash gives the filter for a many_to_many's join resource rows under the path of its join
+  # relationship.
+  defp through_query(parent_query, relationship, binding, join_filter) do
     join_relationship =
       Ash.Resource.Info.relationship(relationship.source, relationship.join_relationship)
 
-    prepared_relationship_query(parent_query, join_relationship, binding)
+    prepared_relationship_query(parent_query, join_relationship, binding,
+      apply_filter: join_filter
+    )
   end
 
-  defp prepared_relationship_query(parent_query, relationship, binding, opts \\ []) do
+  defp prepared_relationship_query(parent_query, relationship, binding, opts) do
     relationship
     |> AshSql.Join.related_ash_query(parent_query, Keyword.put(opts, :start_bindings_at, binding))
     |> Ash.Query.unset(:sort)
