@@ -211,21 +211,14 @@ defmodule AshSql.Aggregate.Lateral do
             is_single? && Enum.at(aggregates, 0).kind == :exists ->
               [aggregate] = aggregates
 
-              expr =
-                if is_nil(Map.get(aggregate.query, :filter)) do
-                  true
-                else
-                  Map.get(aggregate.query, :filter)
-                end
-
+              # Lowered as a reference to the aggregate, so that its join filters apply.
               {exists, acc} =
                 AshSql.Expr.dynamic_expr(
                   input_query,
-                  %Ash.Query.Exists{
-                    path: root_data_path ++ aggregate.relationship_path,
-                    related?: aggregate.related?,
-                    resource: aggregate.query.resource,
-                    expr: expr
+                  %Ash.Query.Ref{
+                    attribute: aggregate,
+                    relationship_path: root_data_path,
+                    resource: resource
                   },
                   input_query.__ash_bindings__
                 )
@@ -513,7 +506,8 @@ defmodule AshSql.Aggregate.Lateral do
                 tenant,
                 source_binding,
                 current_binding,
-                base_binding
+                base_binding,
+                join_filters
               )
           end
 
@@ -734,7 +728,8 @@ defmodule AshSql.Aggregate.Lateral do
          tenant,
          source_binding,
          current_binding,
-         _base_binding
+         _base_binding,
+         _join_filters
        ) do
     field = rel.destination_attribute
 
@@ -772,7 +767,8 @@ defmodule AshSql.Aggregate.Lateral do
          _tenant,
          _source_binding,
          _current_binding,
-         _base_binding
+         _base_binding,
+         _join_filters
        ) do
     subquery
   end
@@ -784,7 +780,8 @@ defmodule AshSql.Aggregate.Lateral do
          tenant,
          source_binding,
          _current_binding,
-         _base_binding
+         _base_binding,
+         join_filters
        ) do
     join_relationship_struct =
       Ash.Resource.Info.relationship(
@@ -792,10 +789,12 @@ defmodule AshSql.Aggregate.Lateral do
         rel.join_relationship
       )
 
+    # Ash gives the filter for the join resource's rows under the path of the join relationship.
     {:ok, through} =
       AshSql.Join.related_subquery(
         join_relationship_struct,
-        query
+        query,
+        apply_filter: join_filters[[join_relationship_struct.name]]
       )
 
     field = rel.source_attribute_on_join_resource
@@ -846,7 +845,8 @@ defmodule AshSql.Aggregate.Lateral do
          _tenant,
          source_binding,
          _current_binding,
-         base_binding
+         base_binding,
+         _join_filters
        ) do
     field = rel.destination_attribute
 

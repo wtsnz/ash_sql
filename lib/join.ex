@@ -183,7 +183,8 @@ defmodule AshSql.Join do
                      source,
                      filter,
                      sort?,
-                     join_filters[Enum.map(current_path, & &1.name)]
+                     join_filters[Enum.map(current_path, & &1.name)],
+                     through_join_filter(join_filters, Enum.map(path, & &1.name), relationship)
                    ) do
                 {:ok, joined_query, _binding} ->
                   joined_query_with_distinct = add_distinct(relationship, join_type, joined_query)
@@ -243,7 +244,8 @@ defmodule AshSql.Join do
              resource,
              nil,
              false,
-             join_filters[full_path]
+             join_filters[full_path],
+             through_join_filter(join_filters, path, relationship)
            ) do
         {:ok, query, binding} ->
           query = add_distinct(relationship, :left, query)
@@ -258,6 +260,15 @@ defmodule AshSql.Join do
       {:error, error} -> {:error, error}
     end
   end
+
+  # Ash gives the filter for a many_to_many's join resource rows under the path of its join
+  # relationship.
+  defp through_join_filter(join_filters, path, %{type: :many_to_many} = relationship)
+       when is_map(join_filters) do
+    join_filters[path ++ [relationship.join_relationship]]
+  end
+
+  defp through_join_filter(_join_filters, _path, _relationship), do: nil
 
   defp with_join_binding({:ok, query}, binding), do: {:ok, query, binding}
   defp with_join_binding({:error, error}, _binding), do: {:error, error}
@@ -1192,7 +1203,8 @@ defmodule AshSql.Join do
          source,
          filter,
          sort?,
-         apply_filter
+         apply_filter,
+         _through_filter
        ) do
     full_path = path ++ [relationship.name]
     initial_ash_bindings = query.__ash_bindings__
@@ -1275,7 +1287,8 @@ defmodule AshSql.Join do
          source,
          filter,
          sort?,
-         apply_filter
+         apply_filter,
+         through_filter
        ) do
     destination_filter =
       relationship.destination
@@ -1301,6 +1314,7 @@ defmodule AshSql.Join do
         filter,
         sort?,
         apply_filter,
+        through_filter,
         used_parent_aggregates,
         destination_filter
       )
@@ -1328,7 +1342,8 @@ defmodule AshSql.Join do
         |> AshSql.Bindings.add_binding(binding_data)
 
       with {:ok, query} <- maybe_join_parent_expr(query, destination_filter),
-           {:ok, relationship_through} <- related_subquery(join_relationship, query),
+           {:ok, relationship_through} <-
+             related_subquery(join_relationship, query, apply_filter: through_filter),
            {:ok, relationship_destination} <-
              related_subquery(relationship, query,
                sort?: sort?,
@@ -1427,7 +1442,8 @@ defmodule AshSql.Join do
          source,
          filter,
          _sort?,
-         apply_filter
+         apply_filter,
+         _through_filter
        ) do
     full_path = path ++ [relationship.name]
     initial_ash_bindings = query.__ash_bindings__
@@ -1636,6 +1652,7 @@ defmodule AshSql.Join do
          filter,
          sort?,
          apply_filter,
+         through_filter,
          used_parent_aggregates,
          destination_filter
        ) do
@@ -1700,7 +1717,8 @@ defmodule AshSql.Join do
              false,
              current_binding
            ),
-         {:ok, relationship_through} <- related_subquery(join_relationship, query),
+         {:ok, relationship_through} <-
+           related_subquery(join_relationship, query, apply_filter: through_filter),
          {:ok, relationship_destination} <-
            related_subquery(relationship, query_with_bindings,
              sort?: sort?,
